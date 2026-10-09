@@ -246,7 +246,8 @@ ObjectStoreSink(store: ObjectStore, *, background: bool = True, queue_size: int 
   re-uploads it; captures stamped in between point at a missing sidecar and the CLI refuses to
   promote them. .flush(timeout) -> bool (drained?). .store -> ObjectStore. First failed
   put per sink logs WARNING with store uri, later debug; never raises. atexit flush registered
-  on first write -- but SIGTERM skips atexit: install signal.signal(SIGTERM, lambda *_:
+  on first background write, waits flush_timeout; if it times out it logs one WARNING with the
+  store uri and the number of items still pending (dropped) -- but SIGTERM skips atexit: install signal.signal(SIGTERM, lambda *_:
   sys.exit(0)) or call evalshift.flush_captures(timeout) in your shutdown hook; on Lambda call
   flush_captures() before returning or use background=False. No retry layer (clients retry).
   GC/max_captures/capture_ttl do not apply -> bucket lifecycle rules. Dedup still applies.

@@ -17,7 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or `configure(sink=ObjectStoreSink(store))`. Keys mirror the local layout
   exactly, so the CLI reads a mirrored bucket unchanged. Uploads run on a
   bounded background queue and never raise into the agent; the first failed
-  upload per sink logs a warning. Extras: `evalshift-sdk[s3]`, `[gcs]`,
+  upload per sink logs a warning, and so does an exit flush that times out with
+  uploads still queued (naming the store and how many items it dropped). Extras: `evalshift-sdk[s3]`, `[gcs]`,
   `[azure]`. New top-level `flush_captures(timeout)` for `SIGTERM` handlers and
   Lambda. Local disk remains the default; nothing changes for existing users.
 - `evalshift.stores`: the `ObjectStore` protocol, `MemoryStore`, the shared

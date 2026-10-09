@@ -117,7 +117,35 @@ def test_atexit_registered_once_on_first_background_write(monkeypatch: pytest.Mo
     sink.write(_envelope("cap_1"))
     sink.write(_envelope("cap_2"))
     assert sink.flush(timeout=5)
-    assert registered == [(sink.flush, 3.0)]
+    assert registered == [(sink._flush_at_exit,)]
+
+
+def test_exit_flush_timeout_logs_one_warning(caplog: pytest.LogCaptureFixture) -> None:
+    class NamedGatedStore(GatedStore):
+        uri = "memory://gated"
+
+    store = NamedGatedStore()
+    sink = ObjectStoreSink(store, flush_timeout=0.2)
+    sink.write(_envelope("cap_1"))
+    sink.write(_envelope("cap_2"))
+    with caplog.at_level(logging.DEBUG, logger="evalshift"):
+        sink._flush_at_exit()
+    store.gate.set()
+    assert sink.flush(timeout=5)
+    [warning] = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert warning.levelno == logging.WARNING
+    message = warning.getMessage()
+    assert "memory://gated" in message
+    assert "timed out after 0.2s" in message
+    assert "2 item(s) pending" in message
+
+
+def test_exit_flush_is_silent_when_the_queue_drains(caplog: pytest.LogCaptureFixture) -> None:
+    sink = ObjectStoreSink(MemoryStore())
+    sink.write(_envelope("cap_1"))
+    with caplog.at_level(logging.DEBUG, logger="evalshift"):
+        sink._flush_at_exit()
+    assert not caplog.records
 
 
 def test_flush_is_immediately_true_when_nothing_was_written() -> None:

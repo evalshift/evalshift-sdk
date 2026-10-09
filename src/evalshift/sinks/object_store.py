@@ -13,7 +13,8 @@ write, so the CLI mirrors a bucket into ``.evalshift/`` and reads it unchanged.
 **Background by default.** ``write`` enqueues and returns; one daemon thread drains the queue
 with ``store.put``. The queue is bounded (``queue_size``); when it is full the incoming item is
 dropped with a debug line -- never block the agent. ``flush(timeout)`` waits for the queue to
-drain and is registered with :mod:`atexit` the first time the worker starts. Python's default
+drain; an exit flush (``flush_timeout``) is registered with :mod:`atexit` the first time the
+worker starts, and logs one ``WARNING`` if it times out with items still pending. Python's default
 ``SIGTERM`` handling skips ``atexit``, so hosts that are stopped by signal must either install a
 handler that calls ``sys.exit(0)`` or call :func:`evalshift.flush_captures` in their own
 shutdown hook; on Lambda, where background threads freeze between invocations, call it before
@@ -185,8 +186,26 @@ class ObjectStoreSink:
             )
             self._worker.start()
             if not self._atexit_registered:
-                atexit.register(self.flush, self._flush_timeout)
+                atexit.register(self._flush_at_exit)
                 self._atexit_registered = True
+
+    def _flush_at_exit(self) -> None:
+        """The :mod:`atexit` hook: flush, and say so once if anything is left behind.
+
+        A timeout here is the last chance to report loss -- the process is about to take the
+        queue with it -- so it is a WARNING naming the store and the backlog, never silent.
+        """
+        if self.flush(self._flush_timeout):
+            return
+        with self._lock:
+            pending = self._pending
+        logger.warning(
+            "evalshift: object store flush to %s timed out after %.1fs with %d item(s) pending "
+            "(dropped at exit)",
+            getattr(self._store, "uri", "<store>"),
+            self._flush_timeout,
+            pending,
+        )
 
     def _run(self) -> None:
         while True:

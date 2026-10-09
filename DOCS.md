@@ -668,7 +668,7 @@ EVALSHIFT_CAPTURE=1 EVALSHIFT_SINK=s3://acme-evals/support-agent python agent.py
 
 **Background, bounded, fail-open.** `write` enqueues and returns; one daemon thread uploads. The queue holds 1000 items by default and drops the newest when full (one debug line). A failing upload never raises into your agent: the first failure per sink logs a `WARNING` with the store URI, later ones `debug`. There is no retry layer of its own — boto3, the GCS client and the Azure client already retry.
 
-**Shutdown.** The sink registers a flush with `atexit`, but Python's default `SIGTERM` handling does *not* run `atexit`. On ECS/Fargate, Kubernetes or anything that stops you by signal, do one of:
+**Shutdown.** The sink registers a flush with `atexit` the first time it uploads in the background. It waits up to `flush_timeout` (10 s by default); if uploads are still queued when it gives up, it logs one `WARNING` naming the store and how many items were dropped. Python's default `SIGTERM` handling does *not* run `atexit`. On ECS/Fargate, Kubernetes or anything that stops you by signal, do one of:
 
 ```python
 import signal, sys
