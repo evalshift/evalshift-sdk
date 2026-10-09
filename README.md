@@ -3,8 +3,10 @@
 In-process capture SDK for [EvalShift](https://github.com/evalshift/evalshift-cli).
 
 Install it inside your agent process to record what the agent does — model calls, tool calls,
-retrievals — and write CLI-valid traces to `.evalshift/captures/`. The `evalshift` CLI reads
-those captures from disk; the SDK and CLI never call each other.
+retrievals — and write CLI-valid traces to `.evalshift/captures/`, or to an object store you
+own when the host's disk does not outlive it. The `evalshift` CLI reads those captures from
+disk, or mirrors them down from the bucket; the layout is the interface, and the SDK and CLI
+never call each other.
 
 - **Distribution:** `evalshift-sdk` · **import name:** `evalshift`
 - **Runtime deps:** none (stdlib-only)
@@ -44,7 +46,15 @@ pip install "evalshift-sdk[anthropic]"     # anthropic>=0.40
 pip install "evalshift-sdk[google-genai]"  # google-genai>=1.0
 ```
 
-Every adapter module is import-guarded, so the SDK stays dependency-free at runtime unless you opt in.
+Optional object-store sinks (`EVALSHIFT_SINK=s3://…` / `gs://…` / `az://…`, see below):
+
+```bash
+pip install "evalshift-sdk[s3]"            # boto3 — Amazon S3 and S3-compatible stores
+pip install "evalshift-sdk[gcs]"           # google-cloud-storage
+pip install "evalshift-sdk[azure]"         # azure-storage-blob + azure-identity
+```
+
+Every adapter and store module is import-guarded, so the SDK stays dependency-free at runtime unless you opt in.
 
 > **Co-install note:** the EvalShift CLI (PyPI `evalshift`, import package `evalshift_cli`)
 > depends on this SDK, so both live in one environment and `pip install evalshift` brings the
@@ -92,6 +102,25 @@ capture: `EVALSHIFT_MAX_CAPTURES=0 EVALSHIFT_DEDUP=off`. Disable dedup with `off
 (capture every run) — it is not the same as `configure(sample_rate=0.0)`, which captures nothing.
 The same knobs are available in code via
 `configure(max_captures=..., dedup=..., capture_ttl=..., sample_rate=...)`.
+
+## Hosts whose disk does not outlive them
+
+On Fargate, Lambda or Kubernetes the capture directory disappears with the task. Ship captures
+to an object store you own instead — one env var next to the gate, no code change:
+
+```bash
+EVALSHIFT_CAPTURE=1 EVALSHIFT_SINK=s3://acme-evals/support-agent python agent.py
+```
+
+`s3://<bucket>/<prefix>` (also MinIO, R2, B2 via `AWS_ENDPOINT_URL`), `gs://<bucket>/<prefix>` and
+`az://<account>/<container>/<prefix>` are accepted; install the matching extra above. Credentials
+come from each provider's default chain, never from the URI. Uploads run on a bounded background
+thread and never raise into the agent; an invalid `EVALSHIFT_SINK` or a missing extra logs one
+warning and falls back to local disk. The keys mirror the local layout exactly, so the CLI reads a
+bucket unchanged once `captures.store` names it in `evalshift.yaml`. Hosts stopped by `SIGTERM`
+should call `evalshift.flush_captures()` from a shutdown hook (Lambda: before the handler
+returns). The hygiene knobs above apply to local disk only; bucket retention is a lifecycle rule.
+Details: [DOCS.md — ObjectStoreSink and cloud stores](https://github.com/evalshift/evalshift-sdk/blob/main/DOCS.md#objectstoresink-and-cloud-stores).
 
 ## Further reading
 
