@@ -10,7 +10,7 @@ mechanism behind `model_call.toolset_ref` / `tools_offered` specifically.
 
 ## TL;DR
 
-- Redaction runs **in-process, before any byte hits disk** (D-4).
+- Redaction runs **in-process, before any byte hits disk or an object store** (D-4).
 - `redact=` is **required** at every capture point — masking is an explicit decision, never a
   default (D-4c). There is no way to instrument an agent without answering the question.
 - If your redactor **raises, the capture is dropped** — never written half-masked (D-4a). Your

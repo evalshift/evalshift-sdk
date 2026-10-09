@@ -303,3 +303,19 @@ def test_empty_toolset_gets_real_sidecar_and_ref(tmp_path: Path) -> None:
         "fingerprint": empty_fingerprint,
         "tools": [],
     }
+
+
+def test_toolset_payload_matches_what_the_sink_writes(tmp_path: Path) -> None:
+    from evalshift.sinks.toolset import toolset_payload
+
+    fingerprint = fingerprint_tools(SAMPLE_TOOLS)
+    ToolsetSink(base=tmp_path).write(SAMPLE_TOOLS, fingerprint)
+    on_disk = (tmp_path / "toolsets" / f"{fingerprint.removeprefix('sha256:')}.json").read_text(
+        encoding="utf-8"
+    )
+    assert toolset_payload(SAMPLE_TOOLS, fingerprint) == on_disk
+    assert json.loads(on_disk) == {
+        "schema_version": "1.0.0",
+        "fingerprint": fingerprint,
+        "tools": SAMPLE_TOOLS,
+    }

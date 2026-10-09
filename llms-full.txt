@@ -5,13 +5,17 @@ Package: evalshift-sdk (PyPI) | import: evalshift | version: 0.4.1 | schema: 2.1
 Python: >=3.10 | runtime deps: none (stdlib only) | typed (py.typed) | license: MIT
 Install: pip install evalshift-sdk   (or: uv add evalshift-sdk)
 Optional extras: pip install "evalshift-sdk[langchain]" -> langchain-core>=0.2;
-  "[openai]" -> openai>=1.40; "[anthropic]" -> anthropic>=0.40; "[google-genai]" -> google-genai>=1.0
+  "[openai]" -> openai>=1.40; "[anthropic]" -> anthropic>=0.40; "[google-genai]" -> google-genai>=1.0;
+  "[s3]" -> boto3>=1.34; "[gcs]" -> google-cloud-storage>=2.14;
+  "[azure]" -> azure-storage-blob>=12.19 + azure-identity>=1.15
 
 Purpose: in-process capture SDK for AI agents. Wraps agent invocations, tool calls, and model
 calls; records each run as a span tree; serializes to a JSON capture envelope written to
-<base>/captures/<suite>/cap_<hex>.json on local disk. No network code anywhere in the SDK.
+<base>/captures/<suite>/cap_<hex>.json on local disk, or (EVALSHIFT_SINK=s3://|gs://|az://...)
+to an object store the user owns -- never to EvalShift.
 Captures are consumed by the separate evalshift CLI
-(https://github.com/evalshift/evalshift-cli); disk is the only interface between SDK and CLI.
+(https://github.com/evalshift/evalshift-cli); the layout (captures/<suite>/cap_<hex>.json +
+toolsets/<hex>.json) is the interface between SDK and CLI, on disk or in a bucket.
 
 Quickstart (minimum working setup):
 1. pip install evalshift-sdk
@@ -48,6 +52,7 @@ Safety model (three distinct rules):
 | EVALSHIFT_CAPTURE_TTL | off | Evict capture files older than N seconds. | Config construction |
 | EVALSHIFT_DEDUP | on | Per-process dedup keyed (suite, input_hash). | Config construction |
 | EVALSHIFT_SAMPLE_RATE | off (capture all) | Fraction of runs to capture (0.0-1.0), decided once per agent invocation. | Config construction |
+| EVALSHIFT_SINK | unset (disk) | Ship captures to s3://<bucket>/<prefix>, gs://<bucket>/<prefix> or az://<account>/<container>/<prefix>; needs extra [s3]/[gcs]/[azure]; invalid value or missing extra -> ONE warning, falls back to FileSink. The warning names the var and the accepted forms (or the pip extra), never the value. | Config construction |
 
 "Uncapped/off" literal set for numeric knobs: {"0","none","unlimited","off"} (also empty string).
 Precedence: explicit configure(...) > env var > built-in default. Malformed env values fail open
@@ -198,7 +203,7 @@ configure(*, sink: Sink | None = UNSET, sample_rate: float | None = UNSET, dedup
           max_captures: int | None = UNSET, capture_ttl: float | None = UNSET,
           require_model_call: bool = UNSET) -> None
   Process-wide options, MERGE semantics: only passed kwargs change. None = disabled/unset for
-  sink/sample_rate/max_captures/capture_ttl. There is NO redact knob — configure(redact=...) was
+  sink/sample_rate/max_captures/capture_ttl. sink defaults from EVALSHIFT_SINK when set. There is NO redact knob — configure(redact=...) was
   removed in 0.3.0; masking is required per capture point instead. require_model_call=True drops captures with
   no model_call event (persistence gate for eval-grade capture; off by default).
 
@@ -229,7 +234,37 @@ MemorySink()
   Thread-safe. Use on read-only filesystems (Lambda) and in tests.
   EXCEPTION: toolset sidecars (ToolsetSink, behind model_call's toolset_ref) are always
   file-based, MemorySink or not -- point EVALSHIFT_DIR at a writable mount (e.g. /tmp) too, or
-  every capture's toolset_ref stays unstamped and the CLI refuses to promote it.
+  every capture's toolset_ref stays unstamped and the CLI refuses to promote it. With an
+  ObjectStoreSink the sidecar goes to the store instead.
+
+ObjectStoreSink(store: ObjectStore, *, background: bool = True, queue_size: int = 1000, flush_timeout: float = 10.0)
+  .write(envelope) -> None (keys: captures/<safe_suite>/<capture_id>.json; enqueued, daemon
+  thread uploads; queue full -> newest dropped, debug line). .write_toolset(normalized,
+  fingerprint) -> str | None (toolsets/<hex>.json, once per process; sidecar goes to the SAME
+  store, replacing the file-based ToolsetSink; None when not accepted -> toolset_ref left
+  unstamped). A failed background sidecar put releases the fingerprint, so the next model call
+  re-uploads it; captures stamped in between point at a missing sidecar and the CLI refuses to
+  promote them. .flush(timeout) -> bool (drained?). .store -> ObjectStore. First failed
+  put per sink logs WARNING with store uri, later debug; never raises. atexit flush registered
+  on first background write, waits flush_timeout; if it times out it logs one WARNING with the
+  store uri and the number of items still pending (dropped) -- but SIGTERM skips atexit: install signal.signal(SIGTERM, lambda *_:
+  sys.exit(0)) or call evalshift.flush_captures(timeout) in your shutdown hook (never inside a
+  signal handler: it can deadlock on the sink's lock); on Lambda call
+  flush_captures() before returning or use background=False. No retry layer (clients retry).
+  GC/max_captures/capture_ttl do not apply -> bucket lifecycle rules. Dedup still applies.
+ObjectStore (protocol, evalshift.stores): put(key: str, data: bytes) -> None
+Stores (lazy client, built on first put): evalshift.stores.s3.S3Store(bucket, prefix="", *,
+  client=None) [AWS_ENDPOINT_URL honoured -> MinIO/R2/B2]; evalshift.stores.gcs.GCSStore(bucket,
+  prefix="", *, client=None); evalshift.stores.azure.AzureBlobStore(account, container,
+  prefix="", *, client=None) [account_url https://<account>.blob.core.windows.net];
+  evalshift.stores.MemoryStore() (.objects snapshot). Each has .uri.
+evalshift.stores.open_store(uri) -> ObjectStore (raises ValueError on grammar, MissingExtraError
+  (ImportError, .extra) naming pip install "evalshift-sdk[<extra>]" when any module the adapter
+  needs is absent -- for az:// both azure-storage-blob and azure-identity)
+evalshift.stores.parse_store_uri(uri) -> StoreURI(scheme, bucket, container, prefix) -- grammar
+  shared with the CLI; '@' or '?' anywhere rejected (no credentials in URIs), without echoing
+  the URI in the error.
+flush_captures(timeout: float | None = None) -> bool  (top-level; True immediately for non-object sinks)
 
 load_capture(raw: str | bytes, *, target: str | None = None,
              default_version: str | None = None) -> dict[str, Any]
@@ -389,11 +424,16 @@ evalshift.capture.requested.extract_requested_tool_calls(response: Any) -> list[
   metadata["evalshift"], envelope fields (capture_id, suite, code_version, input_hash).
 - Drops from require_model_call, a raising redactor, or a filesystem error each log one
   logging.getLogger("evalshift") debug line. Gate-off, sampling, and dedup drops are silent.
+- Deliberate WARNING-level exceptions to debug-only logging: an invalid/unusable EVALSHIFT_SINK
+  (once, at config construction), the first failed put per ObjectStoreSink, an ObjectStoreSink
+  exit flush that times out with items pending, and a newer-minor schema read by
+  load_capture/load_envelope.
 - retrieval / guardrail / final_output event types exist in the schema but have NO public
   recording API in the manual surface; only the LangChain adapter (retrieval, final_output) and
   internals emit them. Do not document them as user-recordable.
 - Toolset sidecars (<base>/toolsets/<hex>.json) are content-addressed and written once per
-  distinct fingerprint by ToolsetSink; a repeat write of the same toolset is a cheap no-op
+  distinct fingerprint by ToolsetSink (with an ObjectStoreSink: toolsets/<hex>.json in the store,
+  once per process); a repeat write of the same toolset is a cheap no-op
   existence check, not a second write. GC (hygiene/gc.py) never touches this directory: its
   caller always passes <base>/captures/<suite>/, a sibling, and evict() never recurses into
   subdirectories regardless. No orphan sweeping exists for toolsets in this SDK.
@@ -562,11 +602,16 @@ except MigrationError as e:                 # read path raises; it does NOT fail
 Check in order: (1) EVALSHIFT_CAPTURE not truthy; (2) wrong CWD — default .evalshift is
 CWD-relative, set EVALSHIFT_DIR; (3) dedup collapsed it (classic: agent_session without
 agent_input); (4) sampling skipped it; (5) require_model_call dropped it; (6) redactor raised
-(fail-closed); (7) filesystem OSError (use MemorySink on read-only mounts). Only (5)-(7) log at
-logging.getLogger("evalshift") debug level — (1)-(4) are silent; rule them out first, then enable
-logging.getLogger("evalshift").setLevel(logging.DEBUG) to see which of (5)-(7) fired.
+(fail-closed); (7) filesystem OSError (use MemorySink on read-only mounts); (8) ObjectStoreSink
+dropped it -- nothing local, check the bucket and the logs: first failed put per sink -> WARNING
+with store uri + error (later puts debug); exit flush timed out -> WARNING with store uri + items
+pending; queue full -> debug; SIGTERM without sys.exit(0) skips the exit flush silently. (5)-(7)
+and a full queue log at logging.getLogger("evalshift") debug level — (1)-(4) are silent; rule them
+out first, then enable logging.getLogger("evalshift").setLevel(logging.DEBUG) to see which fired.
 
-Read-only filesystem / Lambda: MemorySink (or EVALSHIFT_DIR at a writable mount, e.g. /tmp) fixes
-the capture envelope, but do the EVALSHIFT_DIR part regardless -- toolset sidecars are always
-file-based, so with no writable mount at all, toolset_ref stays unstamped on every capture and
+Read-only filesystem / Lambda: prefer EVALSHIFT_SINK=s3://|gs://|az://... (capture AND sidecar go
+to the bucket, nothing touches disk; call flush_captures() before the Lambda handler returns).
+Otherwise MemorySink (or EVALSHIFT_DIR at a writable mount, e.g. /tmp) fixes
+the capture envelope, but do the EVALSHIFT_DIR part regardless -- toolset sidecars are
+file-based for every sink except ObjectStoreSink, so with no writable mount at all, toolset_ref stays unstamped on every capture and
 the CLI refuses to promote it.

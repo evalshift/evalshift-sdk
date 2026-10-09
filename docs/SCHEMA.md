@@ -302,8 +302,9 @@ across the major boundary is honored, not overridden.
 ## Guarantees & limits
 
 - **Raise, don't fail open.** Reading is read-side tooling for tests and your own scripts (the CLI
-  has its own reader; disk is the only SDK↔CLI interface), not the capture hot path. It raises
-  typed `MigrationError` subclasses (`UnreadableCaptureError`,
+  has its own reader; the capture layout, on disk or in a bucket, is the only SDK↔CLI
+  interface), not the capture hot path. It raises typed `MigrationError` subclasses
+  (`UnreadableCaptureError`,
   `MissingSchemaVersionError`, `InvalidSchemaVersionError`, `UnsupportedSchemaVersionError`,
   `NoMigrationPathError`, `ObsoleteSchemaVersionError`, `UnknownEventTypeError`) — contrast the
   capture path's fail-open `safety.py` boundary, which must never break the host agent.

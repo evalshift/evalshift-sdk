@@ -27,6 +27,7 @@ def _isolate_config(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         "EVALSHIFT_CAPTURE_TTL",
         "EVALSHIFT_DEDUP",
         "EVALSHIFT_SAMPLE_RATE",
+        "EVALSHIFT_SINK",
     ):
         monkeypatch.delenv(var, raising=False)
     reset_config()

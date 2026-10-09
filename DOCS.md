@@ -1,11 +1,11 @@
 # EvalShift SDK Documentation
 
-The EvalShift SDK is an **in-process capture SDK** for AI agents. You install it inside your agent process, wrap the boundaries you care about — the agent invocation, its model calls, its tool calls — and the SDK records each run as a structured trace and writes it as a JSON capture file to local disk.
+The EvalShift SDK is an **in-process capture SDK** for AI agents. You install it inside your agent process, wrap the boundaries you care about — the agent invocation, its model calls, its tool calls — and the SDK records each run as a structured trace and writes it as a JSON capture file to local disk, or — on hosts whose disk does not outlive them — to an object store you own.
 
 - **Distribution name:** `evalshift-sdk` · **import name:** `evalshift` · **version:** 0.4.1
 - **Python:** >= 3.10 · **runtime dependencies:** none (stdlib only) · **fully typed** (`py.typed` ships)
 - **License:** [MIT](LICENSE)
-- **No network.** The SDK writes only to the local filesystem (or an in-memory buffer). Captures are consumed by the separate [evalshift CLI](https://github.com/evalshift/evalshift-cli); disk is the only interface between the two.
+- **No network by default.** The SDK writes to the local filesystem (or an in-memory buffer) unless you configure an [`ObjectStoreSink`](#objectstoresink-and-cloud-stores), which ships captures to a bucket *you* own — never to EvalShift. Captures are consumed by the separate [evalshift CLI](https://github.com/evalshift/evalshift-cli); the layout is the interface between the two, on disk or in a bucket.
 - **Off by default.** Nothing is recorded unless the `EVALSHIFT_CAPTURE` environment variable is set to a truthy value. Instrumentation is safe to leave in production code paths permanently.
 
 ---
@@ -51,6 +51,14 @@ pip install "evalshift-sdk[google-genai]"  # google-genai>=1.0
 ```
 
 Every adapter module is import-guarded: importing `evalshift.adapters.langchain` (or `.openai`, `.anthropic`, `.genai`) without the matching extra installed does not fail — the SDK stays dependency-free at runtime.
+
+Optional object-store sinks (see [Sinks → `ObjectStoreSink`](#objectstoresink-and-cloud-stores)):
+
+```bash
+pip install "evalshift-sdk[s3]"     # boto3>=1.34 — Amazon S3 and S3-compatible stores
+pip install "evalshift-sdk[gcs]"    # google-cloud-storage>=2.14
+pip install "evalshift-sdk[azure]"  # azure-storage-blob>=12.19 + azure-identity>=1.15
+```
 
 > **Co-install note:** the EvalShift CLI (PyPI `evalshift`, import package `evalshift_cli`) depends on this SDK, so both live in one environment and `pip install evalshift` brings the SDK with it. Production agents that only record captures install `evalshift-sdk` alone.
 
@@ -186,7 +194,7 @@ call to @capture.agent-wrapped function
         │          2. redaction (required `redact=`): mask payloads in memory, pre-serialization
         │          3. serialize: span tree → ordered trace events → capture envelope
         ▼
-  sink write ──── dedup check → base sink write → GC (count cap / TTL eviction)
+  sink write ──── dedup check → base sink write (disk, memory, or object store) → GC (disk only)
 ```
 
 Span-to-event mapping: a **tool span expands into two events** — a `tool_call` at its start and a `tool_result` at its close. A `model_call` or `error` span becomes one event. Events get a dense `sequence_index` ordered by `(timestamp, monotonic op-order)`, so concurrent operations serialize deterministically. Span timing and parentage are stashed under each event's `metadata["evalshift"]` block.
@@ -196,7 +204,7 @@ Span-to-event mapping: a **tool span expands into two events** — a `tool_call`
 A capture bug must never break or slow your agent:
 
 - **Your function call is the only statement the SDK does not wrap in a guard.** Its return value and its exceptions always propagate exactly as if the SDK were not there.
-- Every piece of SDK bookkeeping — opening spans, serializing, writing — is individually guarded. A fault degrades to a dropped capture plus one `debug`-level log line, never an exception into your code.
+- Every piece of SDK bookkeeping — opening spans, serializing, writing — is individually guarded. A fault degrades to a dropped capture plus one `debug`-level log line, never an exception into your code. (A few failures deliberately log at `WARNING` instead, because they would otherwise lose every capture silently: an unusable `EVALSHIFT_SINK` and the first failed object-store upload — see [`ObjectStoreSink`](#objectstoresink-and-cloud-stores).)
 - **Failed runs are still captured.** When your agent raises, the SDK records an `error` event, writes the (partial) capture, and then re-raises your original exception. Failed runs are the highest-value telemetry.
 
 Two deliberate exceptions to fail-open:
@@ -555,6 +563,7 @@ configure(
 | `EVALSHIFT_CAPTURE_TTL` | off | Evict capture files older than N seconds. | At config construction |
 | `EVALSHIFT_DEDUP` | `on` | Collapse captures with identical `(suite, input_hash)` within one process. | At config construction |
 | `EVALSHIFT_SAMPLE_RATE` | off (capture all) | Capture only this fraction of runs (0.0–1.0), decided once per agent invocation. | At config construction |
+| `EVALSHIFT_SINK` | unset (local disk) | Ship captures to an object store you own: `s3://<bucket>/<prefix>`, `gs://<bucket>/<prefix>` or `az://<account>/<container>/<prefix>`. Needs the matching extra (`[s3]`, `[gcs]`, `[azure]`). An invalid value or a missing extra logs **one warning** and falls back to local disk; the warning names the variable and the accepted forms (or the pip extra to install), never the value itself. | At config construction |
 
 - For the numeric knobs, `0`, `none`, `unlimited`, or `off` means "no cap / disabled". Disable
   `EVALSHIFT_DEDUP` with `off` (or `0`/`none`); `false`/`no` are not recognised and leave dedup on.
@@ -577,6 +586,8 @@ To restore unbounded write-everything behavior:
 ```bash
 EVALSHIFT_MAX_CAPTURES=0 EVALSHIFT_DEDUP=off
 ```
+
+**With an object store** (`EVALSHIFT_SINK`), dedup still applies but `max_captures` and `capture_ttl` do not — GC only ever runs after a real disk write. Bound the bucket with a lifecycle rule instead (e.g. expire objects under `<prefix>/captures/` after 30 days). Dedup is per process, so several hosts writing the same input each store a capture; `evalshift capture sync` drops content duplicates when it promotes, so the bucket may be noisy while the suite is not.
 
 **`require_model_call`** (off by default) is a persistence gate for eval-grade capture: a capture with no `model_call` event carries no scoreable ground truth, so hosts that only want promotable captures enable `configure(require_model_call=True)` and content-free captures are silently dropped (one debug log line).
 
@@ -633,6 +644,47 @@ mount at all, every sidecar write fails — silently, fail-open — and every ca
 `toolset_ref` unstamped, which the CLI refuses to promote. Point `EVALSHIFT_DIR` at a writable
 mount (e.g. `/tmp`) even when you use `MemorySink` for the envelopes themselves; see
 [Troubleshooting](#no-capture-file-was-written) and the read-only-filesystem FAQ entry below.
+(An [`ObjectStoreSink`](#objectstoresink-and-cloud-stores) sends the sidecar to its store instead and touches no disk at all.)
+
+### `ObjectStoreSink` and cloud stores
+
+For hosts whose disk does not outlive them — Fargate tasks, Lambda, Kubernetes pods — ship captures to an object store you own. Set one env var next to `EVALSHIFT_CAPTURE=1`:
+
+```bash
+EVALSHIFT_CAPTURE=1 EVALSHIFT_SINK=s3://acme-evals/support-agent python agent.py
+```
+
+| URI form | Store | Extra | Credentials (default chain) |
+|---|---|---|---|
+| `s3://<bucket>/<prefix>` | Amazon S3; also MinIO, Cloudflare R2, Backblaze B2 via boto3's `AWS_ENDPOINT_URL` | `[s3]` | IAM task role / instance profile; `aws sso login` locally |
+| `gs://<bucket>/<prefix>` | Google Cloud Storage | `[gcs]` | Workload Identity / Cloud Run service account; `gcloud auth application-default login` locally |
+| `az://<account>/<container>/<prefix>` | Azure Blob Storage (`https://<account>.blob.core.windows.net`) | `[azure]` | Managed Identity; `az login` locally |
+
+`<prefix>` is optional. Credentials never go in the URI — a URI containing `@` or `?` is rejected, and the error does not echo it back. If `EVALSHIFT_SINK` is invalid, its extra is missing, or the store cannot be opened for any other reason, the SDK logs one warning (naming the variable and the accepted forms, or the pip extra to install — never the value) and keeps writing to local disk.
+
+**The keys are the local layout.** Under your prefix the sink writes exactly what `FileSink` and `ToolsetSink` write to disk — `captures/<suite>/cap_<hex>.json` and `toolsets/<hex>.json` — so the CLI can mirror the bucket into `.evalshift/` and read it unchanged (`evalshift capture sync` does this automatically once `captures.store` is set in `evalshift.yaml`; see the CLI docs). Until your CLI version supports `captures.store`, `aws s3 sync` / `gcloud storage rsync` / `azcopy sync` into a local `.evalshift/` followed by `evalshift capture sync` works the same way.
+
+**Toolset sidecars go to the same store**, once per process per toolset. If a background sidecar upload fails, the sink forgets that toolset so the next model call offering it uploads the sidecar again; captures stamped in between point at a missing sidecar, and the CLI refuses to promote them.
+
+**Background, bounded, fail-open.** `write` enqueues and returns; one daemon thread uploads. The queue holds 1000 items by default and drops the newest when full (one debug line). A failing upload never raises into your agent: the first failure per sink logs a `WARNING` with the store URI, later ones `debug`. There is no retry layer of its own — boto3, the GCS client and the Azure client already retry.
+
+**Shutdown.** The sink registers a flush with `atexit` the first time it uploads in the background. It waits up to `flush_timeout` (10 s by default); if uploads are still queued when it gives up, it logs one `WARNING` naming the store and how many items were dropped. Python's default `SIGTERM` handling does *not* run `atexit`. On ECS/Fargate, Kubernetes or anything that stops you by signal, do one of:
+
+```python
+import signal, sys
+signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))   # SystemExit → atexit → flush
+```
+
+or call `evalshift.flush_captures(timeout=10)` from your own shutdown hook — not from inside the signal handler itself, where it can deadlock on the sink's lock. On **Lambda**, background threads freeze between invocations: call `flush_captures()` before the handler returns, or configure the sink inline:
+
+```python
+from evalshift import ObjectStoreSink, configure
+from evalshift.stores.s3 import S3Store
+
+configure(sink=ObjectStoreSink(S3Store("acme-evals", "support-agent"), background=False))
+```
+
+Programmatic construction accepts any `ObjectStore` — an object with `put(key: str, data: bytes) -> None` — so a store the SDK does not ship is a few lines. `evalshift.stores.MemoryStore` is the in-memory one the tests use.
 
 ### Custom sinks
 
@@ -655,7 +707,7 @@ configure(sink=QueueSink())
 
 ### Hygiene wrapping
 
-Whenever any hygiene knob is active (dedup / max_captures / capture_ttl — and dedup + max_captures are on by default), the active sink is transparently wrapped in an internal `HygieneSink` that applies dedup before the base write and GC after it. Dedup works with any sink (including `MemorySink`); GC runs only when the base write returns a real `Path`, so it is effectively a `FileSink`-only concern. With all three knobs disabled, your sink is used bare.
+Whenever any hygiene knob is active (dedup / max_captures / capture_ttl — and dedup + max_captures are on by default), the active sink is transparently wrapped in an internal `HygieneSink` that applies dedup before the base write and GC after it. Dedup works with any sink (including `MemorySink`); GC runs only when the base write returns a real `Path`, so it is effectively a `FileSink`-only concern (an `ObjectStoreSink` returns `None` and is bounded by bucket lifecycle rules instead). With all three knobs disabled, your sink is used bare.
 
 A dedup-suppressed write returns `None` silently (no log line); a degraded `OSError` write logs one `debug` line.
 
@@ -847,9 +899,9 @@ register_migration("2.1.0", "2.2.0", my_upgrade_fn, description="add foo field")
 
 ## API reference
 
-Everything below except `reset_config` (`evalshift.config`), the `Sink` protocol (`evalshift.sinks`), `CaptureEnvelope` (`evalshift.trace`), `EvalShiftCallbackHandler` and the `wrap_*` wrappers (import lines shown) imports from the top level: `from evalshift import ...`.
+Everything below except `reset_config` (`evalshift.config`), the `Sink` protocol (`evalshift.sinks`), `CaptureEnvelope` (`evalshift.trace`), the object stores (`evalshift.stores`), `EvalShiftCallbackHandler` and the `wrap_*` wrappers (import lines shown) imports from the top level: `from evalshift import ...`.
 
-Top-level exports: `capture`, `record_model_call`, `configure`, `Redactor`, `RedactSetting`, `default_redactor`, `FileSink`, `MemorySink`, `load_capture`, `load_envelope`, `register_migration`, `MigrationError`, `SCHEMA_VERSION`, `__version__`.
+Top-level exports: `capture`, `record_model_call`, `configure`, `flush_captures`, `Redactor`, `RedactSetting`, `default_redactor`, `FileSink`, `MemorySink`, `ObjectStoreSink`, `load_capture`, `load_envelope`, `register_migration`, `MigrationError`, `SCHEMA_VERSION`, `__version__`.
 
 `evalshift.trace` / `evalshift.capture` also export lower-level building blocks used by the SDK's own tests; not a stable public API.
 
@@ -965,6 +1017,8 @@ configure(
 
 Sets process-wide options with merge semantics — only the arguments you pass change. See [Configuration](#configuration) for each knob. `None` means "disabled/unset" for `sink`, `sample_rate`, `max_captures`, `capture_ttl`. There is no `redact` knob — masking is required per capture point (see [Redaction](#redaction)).
 
+`sink` defaults from `EVALSHIFT_SINK` when that is set.
+
 ### `evalshift.config.reset_config`
 
 ```python
@@ -1028,6 +1082,29 @@ MemorySink.captures -> tuple[CaptureEnvelope, ...]  # non-draining snapshot
 ```
 
 In-memory buffer for read-only filesystems and tests. Thread-safe.
+
+### `ObjectStoreSink`
+
+```python
+from evalshift import ObjectStoreSink
+from evalshift.stores import ObjectStore, MemoryStore, parse_store_uri, open_store
+
+ObjectStoreSink(store: ObjectStore, *, background: bool = True, queue_size: int = 1000, flush_timeout: float = 10.0)
+ObjectStoreSink.write(envelope) -> None
+ObjectStoreSink.write_toolset(normalized, fingerprint) -> str | None
+ObjectStoreSink.flush(timeout: float | None = None) -> bool
+ObjectStoreSink.store -> ObjectStore
+```
+
+Stores: `evalshift.stores.s3.S3Store(bucket, prefix="", *, client=None)`, `evalshift.stores.gcs.GCSStore(bucket, prefix="", *, client=None)`, `evalshift.stores.azure.AzureBlobStore(account, container, prefix="", *, client=None)`; each has `put` and a `uri` attribute and builds its client on first use. `open_store(uri) -> ObjectStore` dispatches on the scheme and raises `MissingExtraError` (an `ImportError` naming the pip extra) when a module the scheme needs is absent (for `az://`, `azure-storage-blob` or `azure-identity`); `parse_store_uri(uri) -> StoreURI` validates the grammar alone.
+
+### `flush_captures`
+
+```python
+flush_captures(timeout: float | None = None) -> bool
+```
+
+Waits for a background `ObjectStoreSink` to finish uploading; returns `True` immediately for any other sink. For shutdown hooks and Lambda. Do not call it from inside a signal handler — it can deadlock on the sink's lock; for `SIGTERM`, have the handler call `sys.exit(0)` so the `atexit` flush runs outside it.
 
 ### `load_capture`
 
@@ -1104,8 +1181,9 @@ Work down this checklist:
 5. **`require_model_call` dropped it** — the gate is on and the run recorded no `model_call` event.
 6. **Redactor raised** — a raising redactor drops the capture fail-closed.
 7. **Filesystem error** — read-only mount / disk full; the write degrades silently. Use `MemorySink` on read-only filesystems.
+8. **Object store upload dropped it** — with `EVALSHIFT_SINK` / an `ObjectStoreSink` nothing is written locally; look in the bucket and in the logs. The first failed upload per sink logs a `WARNING` with the store URI and the error (wrong credentials, missing bucket); later failures are `debug`. An exit flush that times out logs a `WARNING` naming the store and how many items were dropped. A full upload queue drops the newest item with a `debug` line. A process stopped by `SIGTERM` without `sys.exit(0)` skips the exit flush entirely, with no log at all — see [Shutdown](#objectstoresink-and-cloud-stores).
 
-Drops from `require_model_call`, a raising redactor, or a filesystem error each log one `debug` line. Gate-off, sampling and dedup drops are silent — rule them out with the checklist above. Turn on the logger to see which branch fired:
+Drops from `require_model_call`, a raising redactor, a filesystem error or a full upload queue each log one `debug` line; a failed upload or a timed-out exit flush logs a `WARNING`. Gate-off, sampling and dedup drops are silent — rule them out with the checklist above. Turn on the logger to see which branch fired:
 
 ```python
 import logging
@@ -1115,7 +1193,7 @@ logging.getLogger("evalshift").setLevel(logging.DEBUG)
 
 ### Does the SDK send data anywhere?
 
-No. The SDK has no network code and zero runtime dependencies. Captures go to the local filesystem (`FileSink`), to process memory (`MemorySink`), or to whatever custom sink you configure — nothing else.
+Not unless you tell it to. By default captures go to the local filesystem (`FileSink`) or process memory (`MemorySink`). If you set `EVALSHIFT_SINK` or configure an `ObjectStoreSink`, they go to the bucket *you* named, using *your* cloud credentials — never to EvalShift. The SDK has no telemetry and no endpoint of its own.
 
 ### Can I leave instrumentation in production?
 
@@ -1123,9 +1201,9 @@ Yes — that's the design. With the gate off, wrappers are pure pass-throughs. W
 
 ### How do I capture in AWS Lambda / read-only containers?
 
-`configure(sink=MemorySink())` and drain with `sink.flush()` at the end of the invocation, or point `EVALSHIFT_DIR` at a writable mount (e.g. `/tmp`).
+Prefer `EVALSHIFT_SINK=s3://...` (or `gs://` / `az://`): the capture and its toolset sidecar both go to the bucket, nothing touches disk, and the data survives the environment. On Lambda call `evalshift.flush_captures()` before the handler returns (background threads freeze between invocations) or use `ObjectStoreSink(..., background=False)`. The older pattern still works too: `configure(sink=MemorySink())` and drain with `sink.flush()`, or point `EVALSHIFT_DIR` at a writable mount (e.g. `/tmp`).
 
-Do the latter regardless of which sink you pick for the envelope itself: toolset sidecars (`ToolsetSink`, behind every `model_call`'s `toolset_ref`) are unconditionally file-based, so on a filesystem with no writable mount anywhere, sidecar writes fail on every call even with `MemorySink()` configured, and every capture's `toolset_ref` stays unstamped — the CLI refuses to promote those. Pointing `EVALSHIFT_DIR` at `/tmp` (or another writable mount) fixes both cases at once.
+If you stay on `MemorySink` or `FileSink`, point `EVALSHIFT_DIR` at a writable mount whichever of the two holds the envelope itself: toolset sidecars (`ToolsetSink`, behind every `model_call`'s `toolset_ref`) are file-based for both, so on a filesystem with no writable mount anywhere, sidecar writes fail on every call even with `MemorySink()` configured, and every capture's `toolset_ref` stays unstamped — the CLI refuses to promote those. Pointing `EVALSHIFT_DIR` at `/tmp` (or another writable mount) fixes both cases at once.
 
 ---
 
