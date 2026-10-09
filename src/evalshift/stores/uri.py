@@ -15,9 +15,12 @@ Stdlib only (D-deps).
 
 from __future__ import annotations
 
+import importlib.util
 from dataclasses import dataclass
 from typing import Literal, cast
 from urllib.parse import urlsplit
+
+from evalshift.stores.base import ObjectStore
 
 Scheme = Literal["s3", "gs", "az"]
 
@@ -87,4 +90,61 @@ def parse_store_uri(uri: str) -> StoreURI:
     return StoreURI(scheme, parts.netloc, None, path)
 
 
-__all__ = ["STORE_URI_FORMS", "Scheme", "StoreURI", "parse_store_uri"]
+_REQUIRED_MODULE: dict[str, str] = {
+    "s3": "boto3",
+    "gs": "google.cloud.storage",
+    "az": "azure.storage.blob",
+}
+
+
+class MissingExtraError(ImportError):
+    """The client library for a store URI's scheme is not installed."""
+
+    def __init__(self, parsed: StoreURI, module: str) -> None:
+        self.extra = parsed.extra
+        super().__init__(
+            f"{parsed.scheme}:// store needs the optional dependency {module!r}; "
+            f'install it with: pip install "evalshift-sdk[{parsed.extra}]"'
+        )
+
+
+def _installed(module: str) -> bool:
+    """Whether ``module`` can be imported, without importing it."""
+    try:
+        return importlib.util.find_spec(module) is not None
+    except ModuleNotFoundError:  # a parent package is missing (e.g. no `google` at all)
+        return False
+
+
+def open_store(uri: str) -> ObjectStore:
+    """Parse ``uri`` and return the matching store, without building its client yet.
+
+    Raises:
+        ValueError: when ``uri`` does not match the grammar (see :func:`parse_store_uri`).
+        MissingExtraError: when the scheme's client library is not installed.
+    """
+    parsed = parse_store_uri(uri)
+    module = _REQUIRED_MODULE[parsed.scheme]
+    if not _installed(module):
+        raise MissingExtraError(parsed, module)
+    if parsed.scheme == "s3":
+        from evalshift.stores.s3 import S3Store
+
+        return S3Store(parsed.bucket, parsed.prefix)
+    if parsed.scheme == "gs":
+        from evalshift.stores.gcs import GCSStore
+
+        return GCSStore(parsed.bucket, parsed.prefix)
+    from evalshift.stores.azure import AzureBlobStore
+
+    return AzureBlobStore(parsed.bucket, parsed.container or "", parsed.prefix)
+
+
+__all__ = [
+    "STORE_URI_FORMS",
+    "MissingExtraError",
+    "Scheme",
+    "StoreURI",
+    "open_store",
+    "parse_store_uri",
+]
