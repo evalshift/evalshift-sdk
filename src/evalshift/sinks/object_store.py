@@ -31,6 +31,14 @@ Stdlib only (D-deps): the cloud client lives inside the store object the caller 
 from __future__ import annotations
 
 import atexit
+
+# Imported for its side effect, not used here. ``concurrent.futures.thread`` calls
+# ``threading._register_atexit`` when first imported, and boto3 imports it (via s3transfer) on
+# the first put. When that first put runs in the exit flush, interpreter shutdown has already
+# begun, the registration raises ``RuntimeError: can't register atexit after shutdown`` and the
+# capture is dropped. Importing it here, while the process is alive, makes the later import a
+# no-op. Stdlib, so D-deps holds.
+import concurrent.futures.thread  # noqa: F401
 import logging
 import queue
 import threading
