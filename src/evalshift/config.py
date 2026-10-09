@@ -22,6 +22,7 @@ Stdlib only (D-deps).
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -31,6 +32,9 @@ from evalshift.hygiene.sample import should_capture
 from evalshift.sinks.base import Sink
 from evalshift.sinks.file import FileSink
 from evalshift.sinks.hygiene import HygieneSink
+from evalshift.sinks.object_store import ObjectStoreSink
+from evalshift.sinks.toolset import ToolsetSink
+from evalshift.stores.uri import MissingExtraError, open_store
 
 #: Env var that gates capture on/off.
 CAPTURE_ENV = "EVALSHIFT_CAPTURE"
@@ -40,6 +44,9 @@ MAX_CAPTURES_ENV = "EVALSHIFT_MAX_CAPTURES"
 CAPTURE_TTL_ENV = "EVALSHIFT_CAPTURE_TTL"
 DEDUP_ENV = "EVALSHIFT_DEDUP"
 SAMPLE_RATE_ENV = "EVALSHIFT_SAMPLE_RATE"
+
+#: Env var naming an object store to ship captures to (``s3://`` / ``gs://`` / ``az://``).
+SINK_ENV = "EVALSHIFT_SINK"
 
 #: Values (case-insensitive, stripped) that count as "capture on". Everything else is off.
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
@@ -98,16 +105,45 @@ def _env_optional_float(name: str, default: float | None) -> float | None:
         return default
 
 
+def _env_sink() -> Sink | None:
+    """Build the sink ``EVALSHIFT_SINK`` names, or ``None`` for the default ``FileSink``.
+
+    Fail-open with a *warning*, not a debug line: a misconfigured remote sink on an ephemeral
+    host means every capture is lost, and the one place that can say so is here, once, at
+    config construction. Blank counts as unset. The store's client is built lazily, so this
+    never touches the network or the credential chain.
+
+    The warning deliberately does not echo the raw value: an ``EVALSHIFT_SINK`` carrying a SAS
+    token (``?sig=...``) or inline credentials (``key:secret@``) would otherwise leak into logs.
+    The exception text is safe to include -- the URI parser's rejections never echo the URI.
+    """
+    raw = os.environ.get(SINK_ENV, "").strip()
+    if not raw:
+        return None
+    try:
+        return ObjectStoreSink(open_store(raw))
+    except (ValueError, MissingExtraError) as exc:
+        safety.logger.warning(
+            "evalshift: %s ignored (%s); captures are written to local disk instead",
+            SINK_ENV,
+            exc,
+        )
+        return None
+
+
 @dataclass
 class _Config:
     """Process-wide capture configuration, mutated by :func:`configure`.
 
+    ``sink`` defaults from ``EVALSHIFT_SINK`` (an object-store URI selects an
+    :class:`~evalshift.sinks.object_store.ObjectStoreSink`; unset, blank or invalid leaves it
+    ``None``, i.e. the default ``FileSink``); an explicit ``configure(sink=...)`` still wins.
     Hygiene fields (``dedup`` / ``max_captures`` / ``capture_ttl`` / ``sample_rate``) default from
     env vars so a host that never calls :func:`configure` still gets bounded ``captures/``. A fault
     while reading any env var fails open to the built-in default via :func:`safety.guard`.
     """
 
-    sink: Sink | None = None
+    sink: Sink | None = field(default_factory=lambda: safety.guard("sink env", _env_sink))
     sample_rate: float | None = field(
         default_factory=lambda: _env_optional_float(SAMPLE_RATE_ENV, None)
     )
@@ -211,6 +247,41 @@ def _toolset_base() -> str | os.PathLike[str] | None:
     return None
 
 
+ToolsetWriter = Callable[[list[dict[str, Any]], str], "str | None"]
+
+
+def toolset_writer() -> ToolsetWriter:
+    """The function :func:`evalshift.capture.api._stamp_toolset` writes a toolset sidecar with.
+
+    An :class:`~evalshift.sinks.object_store.ObjectStoreSink` (unwrapped from the transparent
+    :class:`~evalshift.sinks.hygiene.HygieneSink`) carries its own ``write_toolset`` so the
+    sidecar lands in the same store as the capture. Every other sink -- ``FileSink``,
+    ``MemorySink``, a custom one -- keeps today's file-based
+    :class:`~evalshift.sinks.toolset.ToolsetSink` under :func:`_toolset_base`.
+    """
+    sink: Sink = active_sink()
+    if isinstance(sink, HygieneSink):
+        sink = sink.wrapped
+    if isinstance(sink, ObjectStoreSink):
+        return sink.write_toolset
+    return ToolsetSink(base=_toolset_base()).write
+
+
+def flush_captures(timeout: float | None = None) -> bool:
+    """Wait for a background :class:`ObjectStoreSink` to finish uploading; ``True`` otherwise.
+
+    Call this from a ``SIGTERM`` handler or at the end of a Lambda invocation. Sinks with
+    nothing to flush -- ``FileSink``, ``MemorySink`` (whose own ``flush`` *drains* and is
+    deliberately not called), custom sinks -- return ``True`` immediately.
+    """
+    sink: Sink = active_sink()
+    if isinstance(sink, HygieneSink):
+        sink = sink.wrapped
+    if isinstance(sink, ObjectStoreSink):
+        return sink.flush(timeout)
+    return True
+
+
 def should_capture_now() -> bool:
     """Sampling decision for one agent run (read at agent entry). Fail-open: capture on fault.
 
@@ -232,10 +303,13 @@ def require_model_call() -> bool:
 
 __all__ = [
     "CAPTURE_ENV",
+    "SINK_ENV",
     "active_sink",
     "configure",
+    "flush_captures",
     "is_capture_enabled",
     "require_model_call",
     "reset_config",
     "should_capture_now",
+    "toolset_writer",
 ]

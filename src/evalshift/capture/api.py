@@ -29,7 +29,6 @@ from evalshift.capture.generation import sanitize_generation_config
 from evalshift.capture.span import SpanTree, is_persistable
 from evalshift.capture.toolset import fingerprint_tools, normalize_tools
 from evalshift.redaction import Redactor, RedactSetting, resolve_redactor
-from evalshift.sinks.toolset import ToolsetSink
 from evalshift.trace.serialize import build_capture
 
 P = ParamSpec("P")
@@ -140,20 +139,22 @@ def _stamp_toolset(data: dict[str, Any], resolved: tuple[list[dict[str, Any]], s
     unchanged: neither field is stamped, so the event's ``toolset_ref`` / ``tools_offered`` stay
     at their ``None`` default and the capture is structurally invalid for this event -- on
     purpose, so the CLI refuses to promote it rather than trusting an unstamped toolset.
-    :class:`~evalshift.sinks.toolset.ToolsetSink` is fail-open on its own (an ``OSError`` degrades
-    its ``write`` to ``None``), so a sidecar write failure here degrades to "no ``toolset_ref``",
-    never a raise.
+    A sidecar write failure degrades to "no ``toolset_ref``", never a raise: the writer runs under
+    :func:`evalshift.safety.guard` (``None`` on any exception), on top of
+    :class:`~evalshift.sinks.toolset.ToolsetSink` degrading an ``OSError`` to ``None`` on its
+    own. The guard is what keeps a fault in ``ObjectStoreSink.write_toolset`` (a worker thread
+    that fails to start, say) from escaping to the caller's ``fail_open`` and dropping the whole
+    ``model_call`` event.
 
-    The sink is constructed with :func:`evalshift.config._toolset_base` (not a bare
-    ``ToolsetSink()``) so the sidecar always lands under the same root the active capture sink
-    itself resolves to -- see that function's docstring for exactly which sinks it matches and
-    which fall back to the plain ``EVALSHIFT_DIR``/CWD resolution.
+    The writer comes from :func:`evalshift.config.toolset_writer`, so the sidecar lands wherever
+    the active capture sink itself writes -- the same object store for an ``ObjectStoreSink``,
+    the same on-disk base for everything else -- see that function's docstring.
     """
     if resolved is None:
         return
     normalized, fingerprint = resolved
     data["tools_offered"] = [tool["name"] for tool in normalized]
-    ref = ToolsetSink(base=config._toolset_base()).write(normalized, fingerprint)
+    ref = safety.guard("write toolset", lambda: config.toolset_writer()(normalized, fingerprint))
     if ref is not None:
         data["toolset_ref"] = ref
 
