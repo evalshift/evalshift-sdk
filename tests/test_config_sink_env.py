@@ -156,7 +156,27 @@ def test_require_sink_ready_raises_only_with_the_gate_on(monkeypatch: pytest.Mon
     with pytest.raises(SinkConfigurationError, match="EVALSHIFT_SINK is not a valid store URI"):
         require_sink_ready()
     with pytest.raises(SinkConfigurationError):
-        require_sink_ready()  # raising twice must work (the stored instance is reused)
+        require_sink_ready()  # raising twice must work (a fresh instance is raised each time)
+
+
+def test_require_sink_ready_does_not_mutate_the_stored_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # require_sink_ready() must raise a fresh SinkConfigurationError each time, never the stored
+    # instance itself -- otherwise raising it (especially from inside a caller's except block, as
+    # here) leaves the module-global error carrying a traceback (frames can hold a client's API
+    # key alive) and a __context__ from whatever the caller was handling.
+    monkeypatch.setenv("EVALSHIFT_SINK", "ftp://bucket/prefix")
+    monkeypatch.setenv("EVALSHIFT_CAPTURE", "1")
+    reset_config()
+    try:
+        raise ValueError("unrelated to the sink")
+    except ValueError:
+        with pytest.raises(SinkConfigurationError):
+            require_sink_ready()
+    assert cfg._CONFIG.sink_error is not None
+    assert cfg._CONFIG.sink_error.__traceback__ is None
+    assert cfg._CONFIG.sink_error.__context__ is None
 
 
 def test_configure_with_a_sink_clears_the_error_and_without_one_raises(

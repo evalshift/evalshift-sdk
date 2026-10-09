@@ -128,7 +128,11 @@ def _env_sink() -> Sink | None:
             raw value, directly or through a chained cause: several of the parser's grammar
             errors quote the URI they reject, so every branch raises ``from None`` with a fixed
             message naming only the variable, the scheme, the accepted forms or the package to
-            install.
+            install. ``from None`` only suppresses the display of a chained ``__cause__`` here;
+            it is :meth:`_Config.__post_init__` that clears the caught instance's
+            ``__context__`` and ``__traceback__`` before storing it as ``sink_error``, and any
+            other caller holding onto a caught ``SinkConfigurationError`` must clear both the
+            same way first.
     """
     raw = os.environ.get(SINK_ENV, "").strip()
     if not raw:
@@ -230,14 +234,18 @@ def is_capture_enabled() -> bool:
 
 
 def require_sink_ready() -> None:
-    """Raise the recorded ``EVALSHIFT_SINK`` error if capture is on; a no-op otherwise.
+    """Raise a fresh ``SinkConfigurationError`` if one is recorded and capture is on; else a no-op.
 
     Every explicit touch point calls this -- the ``capture.*`` decorators, the client wrappers,
     the LangChain handler and :func:`configure` without a ``sink`` -- so in a real agent the
-    raise lands at process start, in the deploy logs, before any traffic.
+    raise lands at process start, in the deploy logs, before any traffic. A new instance is
+    raised each time rather than re-raising the stored one: raising mutates an exception's
+    ``__traceback__`` (frames can hold a caller's locals, e.g. an API key, alive) and, without
+    ``from None``, its ``__context__`` would pick up whatever the caller is already handling.
+    The module-global record must stay untouched across repeated calls.
     """
     if _CONFIG.sink_error is not None and _gate_on():
-        raise _CONFIG.sink_error.with_traceback(None)
+        raise SinkConfigurationError(*_CONFIG.sink_error.args) from None
 
 
 def configure(

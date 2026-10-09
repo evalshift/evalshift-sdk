@@ -144,3 +144,4 @@ def test_decorating_with_a_broken_sink_fails_the_process_naming_the_fix() -> Non
     assert result.returncode != 0
     assert "SinkConfigurationError" in result.stderr
     assert "Accepted forms: s3://<bucket>/<prefix>" in result.stderr
+    assert "ftp://bucket/prefix" not in result.stderr
