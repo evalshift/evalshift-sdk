@@ -104,3 +104,28 @@ def test_put_failure_first_warning_then_debug(caplog: pytest.LogCaptureFixture) 
 def test_store_property_exposes_the_store() -> None:
     store = MemoryStore()
     assert ObjectStoreSink(store, background=False).store is store
+
+
+def test_failed_background_toolset_put_releases_fingerprint_for_retry() -> None:
+    class FlakyToolsetStore(MemoryStore):
+        failed = False
+
+        def put(self, key: str, data: bytes) -> None:
+            if key.startswith("toolsets/") and not self.failed:
+                self.failed = True
+                raise ConnectionError("outage")
+            super().put(key, data)
+
+    store = FlakyToolsetStore()
+    sink = ObjectStoreSink(store, background=True)
+    fingerprint = fingerprint_tools(TOOLS)
+    key = f"toolsets/{fingerprint.removeprefix('sha256:')}.json"
+
+    assert sink.write_toolset(TOOLS, fingerprint) == fingerprint
+    assert sink.flush(timeout=5.0)
+    assert store.failed
+    assert key not in store.objects
+
+    assert sink.write_toolset(TOOLS, fingerprint) == fingerprint
+    assert sink.flush(timeout=5.0)
+    assert key in store.objects

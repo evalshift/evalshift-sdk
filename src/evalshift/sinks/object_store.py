@@ -45,7 +45,9 @@ from evalshift.stores.base import ObjectStore
 from evalshift.trace.models import CaptureEnvelope
 from evalshift.trace.serialize import capture_filename, dumps
 
-_Item = tuple[str, bytes]
+# (key, data, fingerprint): the fingerprint is set for toolset sidecars and ``None`` for captures,
+# so a failed background sidecar put can release it for retry.
+_Item = tuple[str, bytes, str | None]
 
 
 class ObjectStoreSink:
@@ -89,17 +91,26 @@ class ObjectStoreSink:
         key is the content hash. Returns ``None`` when the item could not be accepted (queue
         full, or an inline put failed) so the caller leaves ``toolset_ref`` unstamped rather than
         pointing at a sidecar that was never written. Accepted means *enqueued*, not uploaded;
-        if the background put later fails, the CLI refuses to promote the capture that points at
-        the missing sidecar, exactly as it refuses an unstamped one today.
+        if the background put later fails, the worker releases the fingerprint so the next call
+        for it enqueues the sidecar again. Captures stamped before that retry lands point at a
+        missing sidecar, and the CLI refuses to promote them, exactly as it refuses an unstamped
+        one today.
         """
         with self._lock:
             if fingerprint in self._seen_toolsets:
                 return fingerprint
         key = f"toolsets/{fingerprint.removeprefix('sha256:')}.json"
-        if not self._submit(key, toolset_payload(normalized, fingerprint).encode("utf-8")):
-            return None
+        data = toolset_payload(normalized, fingerprint).encode("utf-8")
+        # Mark as seen *before* submitting: the worker may fail the put and release the
+        # fingerprint before ``_submit`` even returns, and that release must not be undone.
         with self._lock:
+            if fingerprint in self._seen_toolsets:
+                return fingerprint
             self._seen_toolsets.add(fingerprint)
+        if not self._submit(key, data, fingerprint):
+            with self._lock:
+                self._seen_toolsets.discard(fingerprint)
+            return None
         return fingerprint
 
     def flush(self, timeout: float | None = None) -> bool:
@@ -119,14 +130,17 @@ class ObjectStoreSink:
 
     # --- internals -----------------------------------------------------------------------
 
-    def _submit(self, key: str, data: bytes) -> bool:
-        """Put inline, or enqueue for the worker. Returns whether the item was accepted."""
+    def _submit(self, key: str, data: bytes, fingerprint: str | None = None) -> bool:
+        """Put inline, or enqueue for the worker. Returns whether the item was accepted.
+
+        ``fingerprint`` is passed for toolset sidecars only; see :meth:`_run`.
+        """
         if not self._background:
             return self._put(key, data)
         self._ensure_worker()
         with self._lock:
             try:
-                self._queue.put_nowait((key, data))
+                self._queue.put_nowait((key, data, fingerprint))
             except queue.Full:
                 logger.debug("evalshift: object store queue full; dropped %s", key)
                 return False
@@ -168,9 +182,12 @@ class ObjectStoreSink:
 
     def _run(self) -> None:
         while True:
-            key, data = self._queue.get()
+            key, data, fingerprint = self._queue.get()
             try:
-                self._put(key, data)
+                if not self._put(key, data) and fingerprint is not None:
+                    # Release the sidecar so the next ``write_toolset`` for it retries the put.
+                    with self._lock:
+                        self._seen_toolsets.discard(fingerprint)
             finally:
                 with self._drained:
                     self._pending -= 1
