@@ -34,7 +34,7 @@ from evalshift.sinks.file import FileSink
 from evalshift.sinks.hygiene import HygieneSink
 from evalshift.sinks.object_store import ObjectStoreSink
 from evalshift.sinks.toolset import ToolsetSink
-from evalshift.stores.uri import MissingExtraError, open_store
+from evalshift.stores.uri import STORE_URI_FORMS, MissingExtraError, open_store
 
 #: Env var that gates capture on/off.
 CAPTURE_ENV = "EVALSHIFT_CAPTURE"
@@ -113,22 +113,32 @@ def _env_sink() -> Sink | None:
     config construction. Blank counts as unset. The store's client is built lazily, so this
     never touches the network or the credential chain.
 
-    The warning deliberately does not echo the raw value: an ``EVALSHIFT_SINK`` carrying a SAS
-    token (``?sig=...``) or inline credentials (``key:secret@``) would otherwise leak into logs.
-    The exception text is safe to include -- the URI parser's rejections never echo the URI.
+    The warning never includes the raw value, directly or through an exception: an
+    ``EVALSHIFT_SINK`` holding a SAS token, an Azure connection string (``AccountKey=...``) or
+    inline credentials would otherwise leak into logs. Several of the parser's grammar errors
+    quote the URI they reject, so a ``ValueError`` gets a fixed message naming only the accepted
+    forms. A :class:`~evalshift.stores.uri.MissingExtraError` is logged as-is: its text names
+    only the scheme, the missing module and the pip extra to install.
     """
     raw = os.environ.get(SINK_ENV, "").strip()
     if not raw:
         return None
     try:
         return ObjectStoreSink(open_store(raw))
-    except (ValueError, MissingExtraError) as exc:
+    except MissingExtraError as exc:
         safety.logger.warning(
             "evalshift: %s ignored (%s); captures are written to local disk instead",
             SINK_ENV,
             exc,
         )
-        return None
+    except ValueError:
+        safety.logger.warning(
+            "evalshift: %s is not a valid store URI (accepted forms: %s); "
+            "captures are written to local disk instead",
+            SINK_ENV,
+            STORE_URI_FORMS,
+        )
+    return None
 
 
 @dataclass

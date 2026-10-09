@@ -79,19 +79,33 @@ def test_env_sink_missing_extra_warns_and_falls_back(
     assert 'pip install "evalshift-sdk[s3]"' in warning.message
 
 
+@pytest.mark.parametrize(
+    ("value", "secret"),
+    [
+        # The parser refuses `?` without echoing the URI...
+        ("az://acct/c?sv=1&sig=SECRETSIG", "SECRETSIG"),
+        # ...but its scheme / bucket / container errors quote the value they reject.
+        (
+            "DefaultEndpointsProtocol=https;AccountName=acct;AccountKey=SECRETKEY==;"
+            "EndpointSuffix=core.windows.net",
+            "SECRETKEY",
+        ),
+        ("az://acct#sig=SECRETSIG", "SECRETSIG"),
+    ],
+)
 def test_env_sink_warning_does_not_leak_secret_bearing_value(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, value: str, secret: str
 ) -> None:
-    # A SAS token in the env value must never reach the logs: the warning names the env var,
-    # the (non-echoing) grammar error and the fallback, not the raw value.
-    monkeypatch.setenv("EVALSHIFT_SINK", "az://acct/c?sv=1&sig=SECRETSIG")
+    # A secret in the env value must never reach the logs: the warning names the env var, the
+    # accepted forms and the fallback -- never the raw value, nor an error message quoting it.
+    monkeypatch.setenv("EVALSHIFT_SINK", value)
     with caplog.at_level(logging.DEBUG, logger="evalshift"):
         reset_config()
     assert isinstance(_unwrap(active_sink()), FileSink)
     [warning] = [r for r in caplog.records if r.levelno == logging.WARNING]
     assert "EVALSHIFT_SINK" in warning.message
     assert "local disk" in warning.message
-    assert all("SECRETSIG" not in r.getMessage() for r in caplog.records)
+    assert all(secret not in r.getMessage() for r in caplog.records)
 
 
 def test_configure_sink_beats_env(monkeypatch: pytest.MonkeyPatch) -> None:
