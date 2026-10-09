@@ -7,8 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `ObjectStoreSink`: ship captures and toolset sidecars to an object store you
+  own — Amazon S3 (and S3-compatible stores via `AWS_ENDPOINT_URL`), Google
+  Cloud Storage or Azure Blob Storage — for hosts whose disk does not outlive
+  them (Fargate, Lambda, pods). Select it with one env var,
+  `EVALSHIFT_SINK=s3://<bucket>/<prefix>` (`gs://…`, `az://<account>/<container>/…`),
+  or `configure(sink=ObjectStoreSink(store))`. Keys mirror the local layout
+  exactly, so the CLI reads a mirrored bucket unchanged. Uploads run on a
+  bounded background queue and never raise into the agent; the first failed
+  upload per sink logs a warning. Extras: `evalshift-sdk[s3]`, `[gcs]`,
+  `[azure]`. New top-level `flush_captures(timeout)` for `SIGTERM` handlers and
+  Lambda. Local disk remains the default; nothing changes for existing users.
+- `evalshift.stores`: the `ObjectStore` protocol, `MemoryStore`, the shared
+  store URI grammar (`parse_store_uri`, `open_store`) and the three adapters.
+
 ### Changed
 
+- An invalid `EVALSHIFT_SINK` value, or one whose client library is not
+  installed, logs **one warning** and falls back to local disk — a deliberate
+  warning-level exception to the capture path's usual debug-level logging,
+  because a silently dropped firehose is the loss this feature exists to
+  prevent. The
+  warning names the variable and the accepted forms (or the pip extra to
+  install), never the value, so a credential pasted into it stays out of logs.
+- Toolset sidecars follow the capture sink: with an `ObjectStoreSink` they are
+  written to the same store; `FileSink`, `MemorySink` and custom sinks keep
+  today's on-disk sidecar.
+- Docs: "disk is the only interface" between SDK and CLI becomes "the layout is
+  the interface, on disk or in a bucket"; the "Does the SDK send data
+  anywhere?" FAQ now answers "not unless you tell it to", and then only to
+  your bucket.
 - The repository moved from the `babaliauskas` GitHub account to the
   `evalshift` organization: <https://github.com/evalshift/evalshift-sdk>. The
   PyPI project links and the docs point there; GitHub redirects the old URLs.

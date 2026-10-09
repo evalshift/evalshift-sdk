@@ -513,6 +513,41 @@ by `GENERATION_KEYS`) and `requested_tool_calls` (via `extract_requested_tool_ca
   plumbing; a provider module contributes only `describe` (kwargs → `CallSpec`), `complete`
   (response → `Completion`), `is_stream` and `on_chunk` / `on_stream_end`.
 
+## Object-store sinks (D-stores)
+
+### D-stores — ship captures to a user-owned bucket; layout is the interface
+Production hosts are ephemeral (Fargate, Lambda, pods) and a capture on their disk dies with
+them. `ObjectStoreSink` (`sinks/object_store.py`) writes to any `ObjectStore` (`stores/base.py`:
+`put(key, bytes)`), selected by `EVALSHIFT_SINK=<uri>` or `configure(sink=...)`.
+
+- **Keys are the local layout** (`captures/<safe_suite>/cap_<hex>.json`, `toolsets/<hex>.json`),
+  so the CLI mirrors a bucket into `.evalshift/` and reads it unchanged. The documented contract
+  moves from "disk is the only interface" to "the layout is the interface".
+- **One URI grammar** shared verbatim with the CLI (`stores/uri.py`): `s3://`, `gs://`,
+  `az://<account>/<container>/<prefix>`; `@`/`?` rejected so credentials never live in config.
+  Neither leaks into logs either: the `@`/`?` rejections do not echo the URI, and the
+  invalid-`EVALSHIFT_SINK` warning never echoes the env value -- it names the variable, the
+  accepted forms and the local-disk fallback (or, for a missing client library, the pip extra).
+- **Adapters are thin and lazy** (`stores/s3.py`, `gcs.py`, `azure.py`): client built on first
+  `put`, typed `Any`, library imported inside the method. Extras `[s3]`, `[gcs]`, `[azure]`;
+  `dependencies = []` holds (D-deps). No `fsspec`: it pins botocore aggressively and pulls async
+  stacks, too heavy for an embedded SDK.
+- **Background queue, bounded, drop-newest on overflow**; one daemon worker; `flush(timeout)`
+  registered with `atexit` on first background write. The SDK installs **no signal handlers** --
+  a host that is stopped by `SIGTERM` must `sys.exit(0)` from its own handler or call
+  `flush_captures()`.
+- **No retry layer**: the cloud clients retry already.
+- **Warning-level logging, deliberately**: the first failed put per sink, and an invalid or
+  unusable `EVALSHIFT_SINK`, log at `WARNING` rather than the capture path's usual `debug`,
+  because a silently dropped firehose on an ephemeral host is exactly the loss this feature
+  exists to prevent. Later put failures on the same sink drop back to `debug`.
+- **Sidecar routing**: `config.toolset_writer()` returns the object sink's `write_toolset` when
+  one is active, else the file-based `ToolsetSink`; `_stamp_toolset` no longer constructs a sink.
+  A failed background sidecar put releases its fingerprint so the next model call re-uploads it,
+  rather than every later capture in a long-lived process pointing at a sidecar that never landed.
+- **GC does not apply** (`write` returns `None`); bucket lifecycle rules replace it. Dedup still
+  applies, per process.
+
 ## Open follow-ups (not blocking v1)
 - ~~**D1-followup:** unify packaging so CLI + SDK co-install cleanly~~ — resolved 2026-09-09 in
   the CLI-depends-on-SDK form; see D-pkg.
