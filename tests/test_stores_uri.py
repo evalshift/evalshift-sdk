@@ -49,3 +49,17 @@ def test_extra_name_per_scheme() -> None:
     assert parse_store_uri("s3://b").extra == "s3"
     assert parse_store_uri("gs://b").extra == "gcs"
     assert parse_store_uri("az://a/c").extra == "azure"
+
+
+@pytest.mark.parametrize(
+    ("uri", "secret"),
+    [
+        ("az://acct/c?sv=2024&sig=SECRETSIG", "SECRETSIG"),
+        ("s3://AKIAKEY:SECRET@bucket/p", "SECRET"),
+        ("s3://AKIAKEY:SECRET@bucket/p", "AKIAKEY"),
+    ],
+)
+def test_credential_rejection_does_not_echo_secret(uri: str, secret: str) -> None:
+    with pytest.raises(ValueError, match="credential chain") as excinfo:
+        parse_store_uri(uri)
+    assert secret not in str(excinfo.value)

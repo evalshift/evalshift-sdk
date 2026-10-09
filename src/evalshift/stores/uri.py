@@ -65,7 +65,10 @@ def parse_store_uri(uri: str) -> StoreURI:
             "credentials are not accepted in a store URI; use the provider's credential chain"
         )
     if "?" in text:
-        raise ValueError(f"query parameters are not accepted in a store URI: {text!r}")
+        # Never echo the URI: a query string is where SAS tokens and signatures live.
+        raise ValueError(
+            "query parameters are not accepted in a store URI; use the provider's credential chain"
+        )
     parts = urlsplit(text)
     if parts.scheme not in _EXTRA_FOR_SCHEME:
         raise ValueError(f"unsupported store URI {text!r}; accepted forms: {STORE_URI_FORMS}")
