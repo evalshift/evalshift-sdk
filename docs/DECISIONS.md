@@ -526,8 +526,9 @@ them. `ObjectStoreSink` (`sinks/object_store.py`) writes to any `ObjectStore` (`
 - **One URI grammar** shared verbatim with the CLI (`stores/uri.py`): `s3://`, `gs://`,
   `az://<account>/<container>/<prefix>`; `@`/`?` rejected so credentials never live in config.
   Neither leaks into logs either: the `@`/`?` rejections do not echo the URI, and the
-  invalid-`EVALSHIFT_SINK` warning never echoes the env value -- it names the variable,
-  accepted forms and the package to install -- never the value.
+  invalid-`EVALSHIFT_SINK` message never echoes the env value (it is now primarily an exception;
+  see D-stores-b) -- it names the variable, the accepted forms and the package to install --
+  never the value.
 - **Adapters are thin and lazy** (`stores/s3.py`, `gcs.py`, `azure.py`): client built on first
   `put`, typed `Any`, library imported inside the method. Client libraries are plain packages
   (`pip install boto3` / `google-cloud-storage` / `azure-storage-blob azure-identity`); the

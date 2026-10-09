@@ -31,7 +31,7 @@ Quickstart (minimum working setup):
 4. Result: .evalshift/captures/<suite>/cap_<hex>.json appears in the CWD, ready for the
    evalshift CLI. Full runnable code in "Minimal examples" below.
 
-Safety model (three distinct rules):
+Safety model (four distinct rules):
 1. CAPTURE PATH IS FAIL-OPEN: every piece of SDK bookkeeping is guarded; a fault drops the
    capture and logs one debug line, never raises into the host. The user's function call is the
    only unwrapped statement — its return value and exceptions always propagate. When the user
@@ -41,6 +41,10 @@ Safety model (three distinct rules):
    half-masked). The host agent is unaffected.
 3. READ PATH RAISES: load_capture/load_envelope raise typed MigrationError subclasses; they do
    not fail open.
+4. SINK CONFIGURATION RAISES AT STARTUP: an unusable EVALSHIFT_SINK (library missing, bad URI)
+   raises SinkConfigurationError at the first capture.* decorator / client wrapper / LangChain
+   handler / configure() while EVALSHIFT_CAPTURE is on; never on bare import, never with capture
+   off.
 
 ## Environment variables
 
@@ -55,8 +59,10 @@ Safety model (three distinct rules):
 | EVALSHIFT_SINK | unset (disk) | Ship captures to s3://<bucket>/<prefix>, gs://<bucket>/<prefix> or az://<account>/<container>/<prefix>; needs the provider's client library (pip install boto3 / google-cloud-storage / azure-storage-blob azure-identity). Unusable value (library missing, bad URI) -> recorded at import, raised as SinkConfigurationError by the first capture.* decorator / client wrapper / LangChain handler / configure() while EVALSHIFT_CAPTURE is on; never on bare import, never with capture off; if the gate turns on later, captures are dropped with ONE warning (never written to disk instead). Message names the var, scheme and package, never the value. | Config construction |
 
 "Uncapped/off" literal set for numeric knobs: {"0","none","unlimited","off"} (also empty string).
-Precedence: explicit configure(...) > env var > built-in default. Malformed env values fail open
-to the default. Negative or zero ints -> uncapped (None).
+Precedence: explicit configure(...) > env var > built-in default. Malformed env values for the
+hygiene knobs fail open to the default; EVALSHIFT_SINK is the exception -- an unusable value
+raises SinkConfigurationError at startup while capture is on (row above). Negative or zero ints
+-> uncapped (None).
 Disable EVALSHIFT_DEDUP with "off" (or "0"/"none"); "false"/"no" are not recognised and leave
 dedup on. EVALSHIFT_SAMPLE_RATE=0 means sampling off (capture every run), whereas
 configure(sample_rate=0.0) captures nothing; to capture nothing via env vars, unset

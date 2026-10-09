@@ -97,7 +97,7 @@ change required (precedence: an explicit `configure(...)` call > env var > built
 | `EVALSHIFT_SAMPLE_RATE` | off | Capture only this fraction of runs, e.g. `0.25`. |
 | `EVALSHIFT_DIR` | `.evalshift` | Capture root directory. |
 
-A malformed value falls back to the default (capture never crashes). To restore fully unbounded
+A malformed value falls back to the default (these knobs never crash capture). To restore fully unbounded
 capture: `EVALSHIFT_MAX_CAPTURES=0 EVALSHIFT_DEDUP=off`. Disable dedup with `off` (or `0`/`none`);
 `false`/`no` are not recognised and leave dedup on. `EVALSHIFT_SAMPLE_RATE=0` means sampling off
 (capture every run) — it is not the same as `configure(sample_rate=0.0)`, which captures nothing.

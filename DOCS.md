@@ -572,7 +572,9 @@ configure(
   `configure(sample_rate=0.0)` captures nothing; to capture nothing via the env var, unset
   `EVALSHIFT_CAPTURE` instead.
 - **Precedence:** explicit `configure(...)` > environment variable > built-in default.
-- Malformed values fail open to the default — a bad env var can never crash your agent.
+- Malformed values for the hygiene knobs fail open to the default; `EVALSHIFT_SINK` is the
+  exception — an unusable value raises `SinkConfigurationError` at startup while capture is on
+  (row above).
 
 ### Keeping `captures/` bounded
 
@@ -1204,7 +1206,7 @@ Not unless you tell it to. By default captures go to the local filesystem (`File
 
 ### Can I leave instrumentation in production?
 
-Yes — that's the design. With the gate off, wrappers are pure pass-throughs. With it on, all SDK bookkeeping is fail-open: a capture bug degrades to a dropped file and a debug log line, never an exception or a slowdown surfaced to your agent.
+Yes — that's the design. With the gate off, wrappers are pure pass-throughs. With it on, all SDK bookkeeping is fail-open: a capture bug degrades to a dropped file and a debug log line, never an exception or a slowdown surfaced to your agent (configuration is the one exception: an unusable `EVALSHIFT_SINK` raises at startup — see [Troubleshooting](#sinkconfigurationerror-at-startup)).
 
 ### How do I capture in AWS Lambda / read-only containers?
 
