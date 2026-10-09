@@ -1,4 +1,7 @@
-"""Azure Blob Storage ``ObjectStore``. Extra: ``evalshift-sdk[azure]``.
+"""Azure Blob Storage ``ObjectStore``.
+
+Needs ``azure-storage-blob`` and ``azure-identity``
+(``pip install azure-storage-blob azure-identity``).
 
 The account URL is derived as ``https://<account>.blob.core.windows.net``. Credentials come
 from ``DefaultAzureCredential`` -- Managed Identity on AKS, Container Apps and App Service,
@@ -9,6 +12,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from evalshift.stores.uri import require_store_modules
+
 
 class AzureBlobStore:
     """Put blobs under ``az://<account>/<container>/<prefix>``."""
@@ -16,6 +21,8 @@ class AzureBlobStore:
     def __init__(
         self, account: str, container: str, prefix: str = "", *, client: Any | None = None
     ) -> None:
+        if client is None:
+            require_store_modules("az")  # loud here, in user code, not on the first background put
         self.account = account
         self.container = container
         self.prefix = prefix.strip("/")
@@ -28,7 +35,8 @@ class AzureBlobStore:
 
     def _get_client(self) -> Any:
         if self._client is None:
-            from azure.identity import DefaultAzureCredential  # lazy: [azure] extra
+            # lazy: optional, presence checked in __init__
+            from azure.identity import DefaultAzureCredential
             from azure.storage.blob import BlobServiceClient
 
             self._client = BlobServiceClient(self.account_url, credential=DefaultAzureCredential())

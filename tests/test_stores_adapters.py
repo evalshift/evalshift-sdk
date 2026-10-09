@@ -6,6 +6,7 @@ pytest, but no test here touches the network: every client is a stub.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 import pytest
@@ -190,3 +191,29 @@ def test_store_uri_packages_property() -> None:
 def test_open_store_rejects_bad_grammar() -> None:
     with pytest.raises(ValueError, match="accepted forms"):
         open_store("ftp://b/p")
+
+
+@pytest.mark.parametrize(
+    ("build", "package"),
+    [
+        (lambda: S3Store("b", "p"), "boto3"),
+        (lambda: GCSStore("b", "p"), "google-cloud-storage"),
+        (lambda: AzureBlobStore("a", "c", "p"), "azure-storage-blob azure-identity"),
+    ],
+)
+def test_store_without_a_client_requires_its_library_at_construction(
+    monkeypatch: pytest.MonkeyPatch, build: Callable[[], object], package: str
+) -> None:
+    # The client is still built lazily on the first put (a background thread, where a raise
+    # would only be a logged failure); the *presence* of the library is checked here, where
+    # user code constructs the store and a raise is loud.
+    monkeypatch.setattr(uri_module, "_installed", lambda module: False)
+    with pytest.raises(MissingStoreDependencyError, match=rf"pip install {package}$"):
+        build()
+
+
+def test_store_with_an_injected_client_needs_no_library(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(uri_module, "_installed", lambda module: False)
+    S3Store("b", "p", client=object())
+    GCSStore("b", "p", client=object())
+    AzureBlobStore("a", "c", "p", client=object())
