@@ -5,6 +5,7 @@ the in-memory store used by tests. Provider adapters (``evalshift.stores.s3`` / 
 from __future__ import annotations
 
 from evalshift.stores.base import ObjectStore
+from evalshift.stores.memory import MemoryStore
 from evalshift.stores.uri import STORE_URI_FORMS, StoreURI, parse_store_uri
 
-__all__ = ["STORE_URI_FORMS", "ObjectStore", "StoreURI", "parse_store_uri"]
+__all__ = ["STORE_URI_FORMS", "MemoryStore", "ObjectStore", "StoreURI", "parse_store_uri"]
