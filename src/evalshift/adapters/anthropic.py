@@ -39,7 +39,7 @@ import json
 import time
 from typing import Any, TypeVar, cast
 
-from evalshift import safety
+from evalshift import config, safety
 from evalshift.adapters._wrap import (
     CallSpec,
     ClientProxy,
@@ -318,7 +318,12 @@ def wrap_anthropic(client: C) -> C:
     :func:`evalshift.adapters._wrap.unwrap` to get the real client back. See the module
     docstring for what is recorded and what is out of scope. Typed as returning the client's
     own type purely for editor ergonomics (like ``wrap_openai`` / ``wrap_genai``).
+
+    Raises:
+        ~evalshift.SinkConfigurationError: when capture is on and ``EVALSHIFT_SINK`` cannot be
+            built.
     """
+    config.require_sink_ready()  # a sink the SDK cannot build fails here, at startup
     return cast(C, _AnthropicProxy(client))
 
 
