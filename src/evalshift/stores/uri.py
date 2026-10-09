@@ -90,10 +90,12 @@ def parse_store_uri(uri: str) -> StoreURI:
     return StoreURI(scheme, parts.netloc, None, path)
 
 
-_REQUIRED_MODULE: dict[str, str] = {
-    "s3": "boto3",
-    "gs": "google.cloud.storage",
-    "az": "azure.storage.blob",
+#: Every module a scheme's adapter imports on its first put. Azure needs two: the blob client and
+#: ``azure.identity`` for ``DefaultAzureCredential`` -- both ship in the ``[azure]`` extra.
+_REQUIRED_MODULES: dict[str, tuple[str, ...]] = {
+    "s3": ("boto3",),
+    "gs": ("google.cloud.storage",),
+    "az": ("azure.storage.blob", "azure.identity"),
 }
 
 
@@ -121,12 +123,13 @@ def open_store(uri: str) -> ObjectStore:
 
     Raises:
         ValueError: when ``uri`` does not match the grammar (see :func:`parse_store_uri`).
-        MissingExtraError: when the scheme's client library is not installed.
+        MissingExtraError: when a module the scheme's adapter needs is not installed; it names
+            the first missing one.
     """
     parsed = parse_store_uri(uri)
-    module = _REQUIRED_MODULE[parsed.scheme]
-    if not _installed(module):
-        raise MissingExtraError(parsed, module)
+    for module in _REQUIRED_MODULES[parsed.scheme]:
+        if not _installed(module):
+            raise MissingExtraError(parsed, module)
     if parsed.scheme == "s3":
         from evalshift.stores.s3 import S3Store
 

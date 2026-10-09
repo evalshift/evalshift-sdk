@@ -258,7 +258,8 @@ Stores (lazy client, built on first put): evalshift.stores.s3.S3Store(bucket, pr
   prefix="", *, client=None) [account_url https://<account>.blob.core.windows.net];
   evalshift.stores.MemoryStore() (.objects snapshot). Each has .uri.
 evalshift.stores.open_store(uri) -> ObjectStore (raises ValueError on grammar, MissingExtraError
-  (ImportError, .extra) naming pip install "evalshift-sdk[<extra>]" when the client lib is absent)
+  (ImportError, .extra) naming pip install "evalshift-sdk[<extra>]" when any module the adapter
+  needs is absent -- for az:// both azure-storage-blob and azure-identity)
 evalshift.stores.parse_store_uri(uri) -> StoreURI(scheme, bucket, container, prefix) -- grammar
   shared with the CLI; '@' or '?' anywhere rejected (no credentials in URIs), without echoing
   the URI in the error.

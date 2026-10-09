@@ -145,6 +145,16 @@ def test_open_store_missing_extra_names_the_pip_extra(monkeypatch: pytest.Monkey
     assert info.value.extra == "gcs"
 
 
+def test_open_store_azure_needs_azure_identity_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The adapter authenticates with DefaultAzureCredential: with azure-identity absent every put
+    # would fail, so the missing half of the [azure] extra must surface here, not per put.
+    monkeypatch.setattr(uri_module, "_installed", lambda module: module != "azure.identity")
+    with pytest.raises(MissingExtraError, match=r'pip install "evalshift-sdk\[azure\]"') as info:
+        open_store("az://a/c/p")
+    assert info.value.extra == "azure"
+    assert "'azure.identity'" in str(info.value)
+
+
 def test_open_store_rejects_bad_grammar() -> None:
     with pytest.raises(ValueError, match="accepted forms"):
         open_store("ftp://b/p")

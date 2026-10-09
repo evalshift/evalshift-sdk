@@ -26,13 +26,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- An invalid `EVALSHIFT_SINK` value, or one whose client library is not
-  installed, logs **one warning** and falls back to local disk — a deliberate
+- An invalid `EVALSHIFT_SINK` value, or one whose extra is not fully
+  installed (for `az://`, both `azure-storage-blob` and `azure-identity`),
+  logs **one warning** and falls back to local disk — a deliberate
   warning-level exception to the capture path's usual debug-level logging,
   because a silently dropped firehose is the loss this feature exists to
-  prevent. The
-  warning names the variable and the accepted forms (or the pip extra to
-  install), never the value, so a credential pasted into it stays out of logs.
+  prevent. The warning names the variable and the accepted forms (or the pip
+  extra to install), never the value, so a credential pasted into it stays out
+  of logs.
 - Toolset sidecars follow the capture sink: with an `ObjectStoreSink` they are
   written to the same store; `FileSink`, `MemorySink` and custom sinks keep
   today's on-disk sidecar.
