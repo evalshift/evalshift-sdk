@@ -63,3 +63,21 @@ def test_credential_rejection_does_not_echo_secret(uri: str, secret: str) -> Non
     with pytest.raises(ValueError, match="credential chain") as excinfo:
         parse_store_uri(uri)
     assert secret not in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    ("uri", "secret"),
+    [
+        # An Azure connection string has no `@` or `?`, so it reaches the grammar checks.
+        (
+            "DefaultEndpointsProtocol=https;AccountName=x;AccountKey=SUPERSECRET==",
+            "SUPERSECRET",
+        ),
+        ("s3:///SECRETPATH", "SECRETPATH"),
+        ("az://SECRETACCOUNT", "SECRETACCOUNT"),
+    ],
+)
+def test_grammar_rejection_does_not_echo_uri(uri: str, secret: str) -> None:
+    with pytest.raises(ValueError) as excinfo:
+        parse_store_uri(uri)
+    assert secret not in str(excinfo.value)
