@@ -1,14 +1,26 @@
-"""``EVALSHIFT_SINK`` selects an ObjectStoreSink at config construction; invalid values warn
-once and fall back to local disk. ``configure(sink=...)`` still beats the env."""
+"""``EVALSHIFT_SINK`` selects an ObjectStoreSink at config construction; an unusable value is
+recorded there and raised by ``require_sink_ready()`` once capture is on. ``configure(sink=...)``
+still beats the env."""
 
 from __future__ import annotations
 
 import logging
+import traceback
+from pathlib import Path
 
 import pytest
 
+from evalshift import SinkConfigurationError, capture
 from evalshift import config as cfg
-from evalshift.config import active_sink, configure, flush_captures, reset_config, toolset_writer
+from evalshift.config import (
+    active_sink,
+    configure,
+    flush_captures,
+    is_capture_enabled,
+    require_sink_ready,
+    reset_config,
+    toolset_writer,
+)
 from evalshift.sinks.file import FileSink
 from evalshift.sinks.hygiene import HygieneSink
 from evalshift.sinks.memory import MemorySink
@@ -48,62 +60,72 @@ def test_env_sink_blank_is_unset(
     assert not caplog.records
 
 
-def test_env_sink_bad_grammar_warns_once_and_falls_back(
+def _recorded() -> SinkConfigurationError:
+    err = cfg._CONFIG.sink_error
+    assert isinstance(err, SinkConfigurationError)
+    return err
+
+
+def test_bad_grammar_is_recorded_at_reset_not_raised(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     monkeypatch.setenv("EVALSHIFT_SINK", "ftp://bucket/prefix")
-    with caplog.at_level(logging.WARNING, logger="evalshift"):
-        reset_config()
-        active_sink()
-        active_sink()
-    assert isinstance(_unwrap(active_sink()), FileSink)
-    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-    assert len(warnings) == 1
-    assert "EVALSHIFT_SINK" in warnings[0].message
-    assert "accepted forms" in warnings[0].message
-    assert "local disk" in warnings[0].message
+    with caplog.at_level(logging.DEBUG, logger="evalshift"):
+        reset_config()  # must not raise: this runs at `import evalshift`
+    err = _recorded()
+    assert str(err) == (
+        "EVALSHIFT_SINK is not a valid store URI. Accepted forms: s3://<bucket>/<prefix>, "
+        "gs://<bucket>/<prefix>, az://<account>/<container>/<prefix>. "
+        "Credentials never go in the URI."
+    )
+    assert not caplog.records
+    assert cfg._CONFIG.sink is None
 
 
-def test_env_sink_missing_extra_warns_and_falls_back(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_missing_library_is_recorded_naming_the_package(monkeypatch: pytest.MonkeyPatch) -> None:
     def _raise(uri: str) -> object:
         raise MissingStoreDependencyError("s3", "boto3")
 
     monkeypatch.setattr(cfg, "open_store", _raise)
     monkeypatch.setenv("EVALSHIFT_SINK", "s3://bucket/prefix")
-    with caplog.at_level(logging.WARNING, logger="evalshift"):
-        reset_config()
-    assert isinstance(_unwrap(active_sink()), FileSink)
-    [warning] = [r for r in caplog.records if r.levelno == logging.WARNING]
-    assert "pip install boto3" in warning.message
+    reset_config()
+    assert str(_recorded()) == (
+        "EVALSHIFT_SINK points at an object store (s3://), but boto3 is not installed. "
+        "Run: pip install boto3, or unset EVALSHIFT_SINK to capture to local disk."
+    )
 
 
-def test_env_sink_unexpected_error_warns_once_and_falls_back(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+def test_missing_azure_library_names_both_packages(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _raise(uri: str) -> object:
+        raise MissingStoreDependencyError("az", "azure.identity")
+
+    monkeypatch.setattr(cfg, "open_store", _raise)
+    monkeypatch.setenv("EVALSHIFT_SINK", "az://acct/c/p")
+    reset_config()
+    assert "Run: pip install azure-storage-blob azure-identity," in str(_recorded())
+
+
+def test_unexpected_open_error_is_recorded_without_its_text(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Anything open_store raises beyond its documented errors must not leave EVALSHIFT_SINK
-    # silently ignored -- and the warning must quote neither the value nor the exception text.
     def _raise(uri: str) -> object:
         raise RuntimeError(f"boom {uri}")
 
     monkeypatch.setattr(cfg, "open_store", _raise)
     monkeypatch.setenv("EVALSHIFT_SINK", "s3://bucket/SECRETPREFIX")
-    with caplog.at_level(logging.DEBUG, logger="evalshift"):
-        reset_config()
-    assert isinstance(_unwrap(active_sink()), FileSink)
-    [warning] = [r for r in caplog.records if r.levelno == logging.WARNING]
-    assert "EVALSHIFT_SINK" in warning.getMessage()
-    assert "local disk" in warning.getMessage()
-    assert all("SECRETPREFIX" not in r.getMessage() and not r.exc_info for r in caplog.records)
+    reset_config()
+    err = _recorded()
+    assert str(err) == (
+        "EVALSHIFT_SINK could not be opened (RuntimeError). Unset it to capture to local disk."
+    )
+    assert "SECRETPREFIX" not in "".join(traceback.format_exception(err))
+    assert err.__context__ is None and err.__traceback__ is None
 
 
 @pytest.mark.parametrize(
     ("value", "secret"),
     [
-        # The parser refuses `?` without echoing the URI...
         ("az://acct/c?sv=1&sig=SECRETSIG", "SECRETSIG"),
-        # ...but its scheme / bucket / container errors quote the value they reject.
         (
             "DefaultEndpointsProtocol=https;AccountName=acct;AccountKey=SECRETKEY==;"
             "EndpointSuffix=core.windows.net",
@@ -112,19 +134,80 @@ def test_env_sink_unexpected_error_warns_once_and_falls_back(
         ("az://acct#sig=SECRETSIG", "SECRETSIG"),
     ],
 )
-def test_env_sink_warning_does_not_leak_secret_bearing_value(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, value: str, secret: str
+def test_recorded_error_never_leaks_a_secret_bearing_value(
+    monkeypatch: pytest.MonkeyPatch, value: str, secret: str
 ) -> None:
-    # A secret in the env value must never reach the logs: the warning names the env var, the
-    # accepted forms and the fallback -- never the raw value, nor an error message quoting it.
+    # The parser's grammar errors may quote the value they reject; the recorded error must
+    # carry a fixed message and no chained cause or context that reaches a traceback.
     monkeypatch.setenv("EVALSHIFT_SINK", value)
-    with caplog.at_level(logging.DEBUG, logger="evalshift"):
-        reset_config()
-    assert isinstance(_unwrap(active_sink()), FileSink)
-    [warning] = [r for r in caplog.records if r.levelno == logging.WARNING]
-    assert "EVALSHIFT_SINK" in warning.message
-    assert "local disk" in warning.message
-    assert all(secret not in r.getMessage() for r in caplog.records)
+    reset_config()
+    err = _recorded()
+    assert secret not in "".join(traceback.format_exception(err))
+    assert err.__cause__ is None and err.__suppress_context__
+    assert err.__context__ is None
+
+
+def test_require_sink_ready_raises_only_with_the_gate_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EVALSHIFT_SINK", "ftp://bucket/prefix")
+    monkeypatch.delenv("EVALSHIFT_CAPTURE", raising=False)
+    reset_config()
+    require_sink_ready()  # gate off: nothing
+    monkeypatch.setenv("EVALSHIFT_CAPTURE", "1")
+    with pytest.raises(SinkConfigurationError, match="EVALSHIFT_SINK is not a valid store URI"):
+        require_sink_ready()
+    with pytest.raises(SinkConfigurationError):
+        require_sink_ready()  # raising twice must work (the stored instance is reused)
+
+
+def test_configure_with_a_sink_clears_the_error_and_without_one_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EVALSHIFT_SINK", "ftp://bucket/prefix")
+    monkeypatch.setenv("EVALSHIFT_CAPTURE", "1")
+    reset_config()
+    with pytest.raises(SinkConfigurationError):
+        configure(dedup=False)
+    assert cfg._CONFIG.dedup is True  # the raise comes first; nothing was merged
+    memory = MemorySink()
+    configure(sink=memory)
+    assert cfg._CONFIG.sink_error is None
+    require_sink_ready()
+    assert is_capture_enabled() is True
+    assert _unwrap(active_sink()) is memory
+
+
+def test_is_capture_enabled_is_false_while_the_sink_is_blocked(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("EVALSHIFT_SINK", "ftp://bucket/prefix")
+    monkeypatch.setenv("EVALSHIFT_CAPTURE", "1")
+    reset_config()
+    with caplog.at_level(logging.WARNING, logger="evalshift"):
+        assert is_capture_enabled() is False
+        assert is_capture_enabled() is False
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert warnings[0].getMessage().startswith("evalshift: capture disabled: EVALSHIFT_SINK")
+
+
+def test_gate_turned_on_late_drops_captures_instead_of_writing_to_disk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("EVALSHIFT_DIR", str(tmp_path))
+    monkeypatch.setenv("EVALSHIFT_SINK", "ftp://bucket/prefix")
+    monkeypatch.delenv("EVALSHIFT_CAPTURE", raising=False)
+    reset_config()
+
+    @capture.agent(suite="s", redact=False, tools=[])  # gate off: decorating must not raise
+    def run(q: str) -> str:
+        return q.upper()
+
+    monkeypatch.setenv("EVALSHIFT_CAPTURE", "1")
+    with caplog.at_level(logging.WARNING, logger="evalshift"):
+        assert run("hi") == "HI"
+        assert run("again") == "AGAIN"
+    assert not list(tmp_path.rglob("*.json"))
+    assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 1
 
 
 def test_configure_sink_beats_env(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -16,7 +16,7 @@ the current schema version; ``register_migration`` plugs in a step for a future 
 from __future__ import annotations
 
 from evalshift.capture.api import capture, record_model_call
-from evalshift.config import configure, flush_captures
+from evalshift.config import SinkConfigurationError, configure, flush_captures
 from evalshift.redaction import Redactor, RedactSetting, default_redactor
 from evalshift.sinks.file import FileSink
 from evalshift.sinks.memory import MemorySink
@@ -39,6 +39,7 @@ __all__ = [
     "ObjectStoreSink",
     "RedactSetting",
     "Redactor",
+    "SinkConfigurationError",
     "__version__",
     "capture",
     "configure",
