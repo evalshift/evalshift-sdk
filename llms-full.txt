@@ -1,7 +1,7 @@
 # evalshift-sdk — complete reference for AI tools
 
 Canonical hosted copy: https://www.evalshift.dev/sdk-llms-full.txt
-Package: evalshift-sdk (PyPI) | import: evalshift | version: 0.4.1 | schema: 2.1.0
+Package: evalshift-sdk (PyPI) | import: evalshift | version: 0.5.0 | schema: 2.1.0
 Python: >=3.10 | runtime deps: none (stdlib only) | typed (py.typed) | license: MIT
 Install: pip install evalshift-sdk   (or: uv add evalshift-sdk)
 Optional extras: pip install "evalshift-sdk[langchain]" -> langchain-core>=0.2;
@@ -295,7 +295,7 @@ SCHEMA_VERSION = "2.1.0" (envelope schema this SDK writes; supported: "2.0.0", "
   registers an identity migration 2.0.0 -> 2.1.0 for its additive requested_tool_calls field, and
   2.0.0 registers no migration from any 1.x capture: ObsoleteSchemaVersionError on read, by
   design, see docs/SCHEMA.md)
-__version__ = "0.4.1"
+__version__ = "0.5.0"
 
 evalshift.adapters.langchain.EvalShiftCallbackHandler(*, suite: str, redact: Redactor | bool,
                                                       tools: Any, code_version: str = "")
