@@ -86,6 +86,23 @@ SIDECAR_SCHEMA_VERSION = "1.0.0"
 _SIDECAR_MODE = 0o644
 
 
+def toolset_payload(normalized: list[dict[str, Any]], fingerprint: str) -> str:
+    """The exact JSON text of a toolset sidecar for ``normalized`` under ``fingerprint``.
+
+    Shared by :class:`ToolsetSink` (local disk) and
+    :class:`~evalshift.sinks.object_store.ObjectStoreSink` (remote object store) so the two
+    layouts stay byte-identical: the CLI reads a sidecar the same way wherever it came from.
+    """
+    return json.dumps(
+        {
+            "schema_version": SIDECAR_SCHEMA_VERSION,
+            "fingerprint": fingerprint,
+            "tools": normalized,
+        },
+        ensure_ascii=False,
+    )
+
+
 class ToolsetSink:
     """Write a normalised toolset to ``<base>/toolsets/<hex>.json``, once per distinct toolset."""
 
@@ -110,14 +127,7 @@ class ToolsetSink:
             return fingerprint  # content-addressed: existing content is correct by construction
 
         target_dir.mkdir(parents=True, exist_ok=True)
-        payload = json.dumps(
-            {
-                "schema_version": SIDECAR_SCHEMA_VERSION,
-                "fingerprint": fingerprint,
-                "tools": normalized,
-            },
-            ensure_ascii=False,
-        )
+        payload = toolset_payload(normalized, fingerprint)
         tmp_fd, tmp_name = tempfile.mkstemp(dir=target_dir, prefix=".", suffix=".json.tmp")
         # Bare descriptor: this function owns tmp_fd, and must close it itself, until
         # os.fdopen() below hands it to a file object. Flipped to False the instant that handoff
@@ -160,4 +170,4 @@ class ToolsetSink:
         return fingerprint
 
 
-__all__ = ["SIDECAR_SCHEMA_VERSION", "ToolsetSink"]
+__all__ = ["SIDECAR_SCHEMA_VERSION", "ToolsetSink", "toolset_payload"]
