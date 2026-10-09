@@ -15,7 +15,12 @@ from evalshift.stores import uri as uri_module
 from evalshift.stores.azure import AzureBlobStore
 from evalshift.stores.gcs import GCSStore
 from evalshift.stores.s3 import S3Store
-from evalshift.stores.uri import MissingExtraError, open_store
+from evalshift.stores.uri import (
+    MissingStoreDependencyError,
+    open_store,
+    parse_store_uri,
+    require_store_modules,
+)
 
 # --- S3 ------------------------------------------------------------------------------------
 
@@ -138,21 +143,48 @@ def test_open_store_does_not_construct_a_client() -> None:
     assert store._client is None
 
 
-def test_open_store_missing_extra_names_the_pip_extra(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_open_store_missing_library_names_the_package(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(uri_module, "_installed", lambda module: False)
-    with pytest.raises(MissingExtraError, match=r'pip install "evalshift-sdk\[gcs\]"') as info:
+    with pytest.raises(MissingStoreDependencyError) as info:
         open_store("gs://b/p")
-    assert info.value.extra == "gcs"
+    err = info.value
+    assert str(err) == (
+        "gs:// store needs google-cloud-storage, which is not installed; "
+        "run: pip install google-cloud-storage"
+    )
+    assert (err.scheme, err.module, err.package, err.packages, err.extra) == (
+        "gs",
+        "google.cloud.storage",
+        "google-cloud-storage",
+        "google-cloud-storage",
+        "gcs",
+    )
+    assert "[gcs]" not in str(err)
 
 
-def test_open_store_azure_needs_azure_identity_too(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The adapter authenticates with DefaultAzureCredential: with azure-identity absent every put
-    # would fail, so the missing half of the [azure] extra must surface here, not per put.
+def test_open_store_azure_names_both_packages_when_identity_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # azure-storage-blob alone is not enough: DefaultAzureCredential lives in azure-identity,
+    # and the first put would fail in the background. One pip command installs both.
     monkeypatch.setattr(uri_module, "_installed", lambda module: module != "azure.identity")
-    with pytest.raises(MissingExtraError, match=r'pip install "evalshift-sdk\[azure\]"') as info:
+    with pytest.raises(MissingStoreDependencyError) as info:
         open_store("az://a/c/p")
-    assert info.value.extra == "azure"
-    assert "'azure.identity'" in str(info.value)
+    assert info.value.package == "azure-identity"
+    assert str(info.value).endswith("run: pip install azure-storage-blob azure-identity")
+
+
+def test_require_store_modules_is_a_no_op_when_everything_is_installed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(uri_module, "_installed", lambda module: True)
+    require_store_modules("az")
+
+
+def test_store_uri_packages_property() -> None:
+    assert parse_store_uri("s3://b/p").packages == "boto3"
+    assert parse_store_uri("gs://b/p").packages == "google-cloud-storage"
+    assert parse_store_uri("az://a/c/p").packages == "azure-storage-blob azure-identity"
 
 
 def test_open_store_rejects_bad_grammar() -> None:

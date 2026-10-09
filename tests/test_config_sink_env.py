@@ -15,7 +15,7 @@ from evalshift.sinks.memory import MemorySink
 from evalshift.sinks.object_store import ObjectStoreSink
 from evalshift.sinks.toolset import ToolsetSink
 from evalshift.stores import MemoryStore
-from evalshift.stores.uri import MissingExtraError, parse_store_uri
+from evalshift.stores.uri import MissingStoreDependencyError
 
 
 def _unwrap(sink: object) -> object:
@@ -68,7 +68,7 @@ def test_env_sink_missing_extra_warns_and_falls_back(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     def _raise(uri: str) -> object:
-        raise MissingExtraError(parse_store_uri(uri), "boto3")
+        raise MissingStoreDependencyError("s3", "boto3")
 
     monkeypatch.setattr(cfg, "open_store", _raise)
     monkeypatch.setenv("EVALSHIFT_SINK", "s3://bucket/prefix")
@@ -76,7 +76,7 @@ def test_env_sink_missing_extra_warns_and_falls_back(
         reset_config()
     assert isinstance(_unwrap(active_sink()), FileSink)
     [warning] = [r for r in caplog.records if r.levelno == logging.WARNING]
-    assert 'pip install "evalshift-sdk[s3]"' in warning.message
+    assert "pip install boto3" in warning.message
 
 
 def test_env_sink_unexpected_error_warns_once_and_falls_back(

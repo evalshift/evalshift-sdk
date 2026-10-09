@@ -34,7 +34,7 @@ from evalshift.sinks.file import FileSink
 from evalshift.sinks.hygiene import HygieneSink
 from evalshift.sinks.object_store import ObjectStoreSink
 from evalshift.sinks.toolset import ToolsetSink
-from evalshift.stores.uri import STORE_URI_FORMS, MissingExtraError, open_store
+from evalshift.stores.uri import STORE_URI_FORMS, MissingStoreDependencyError, open_store
 
 #: Env var that gates capture on/off.
 CAPTURE_ENV = "EVALSHIFT_CAPTURE"
@@ -117,16 +117,16 @@ def _env_sink() -> Sink | None:
     ``EVALSHIFT_SINK`` holding a SAS token, an Azure connection string (``AccountKey=...``) or
     inline credentials would otherwise leak into logs. Several of the parser's grammar errors
     quote the URI they reject, so a ``ValueError`` gets a fixed message naming only the accepted
-    forms. A :class:`~evalshift.stores.uri.MissingExtraError` is logged as-is: its text names
-    only the scheme, the missing module and the pip extra to install. Any other exception gets
-    a fixed warning too, without its text.
+    forms. A :class:`~evalshift.stores.uri.MissingStoreDependencyError` is logged as-is: its text
+    names only the scheme, the missing module and the pip packages to install. Any other exception
+    gets a fixed warning too, without its text.
     """
     raw = os.environ.get(SINK_ENV, "").strip()
     if not raw:
         return None
     try:
         return ObjectStoreSink(open_store(raw))
-    except MissingExtraError as exc:
+    except MissingStoreDependencyError as exc:
         safety.logger.warning(
             "evalshift: %s ignored (%s); captures are written to local disk instead",
             SINK_ENV,

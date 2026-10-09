@@ -8,18 +8,20 @@ from evalshift.stores.base import ObjectStore
 from evalshift.stores.memory import MemoryStore
 from evalshift.stores.uri import (
     STORE_URI_FORMS,
-    MissingExtraError,
+    MissingStoreDependencyError,
     StoreURI,
     open_store,
     parse_store_uri,
+    require_store_modules,
 )
 
 __all__ = [
     "STORE_URI_FORMS",
     "MemoryStore",
-    "MissingExtraError",
+    "MissingStoreDependencyError",
     "ObjectStore",
     "StoreURI",
     "open_store",
     "parse_store_uri",
+    "require_store_modules",
 ]

@@ -31,6 +31,23 @@ STORE_URI_FORMS = (
 
 _EXTRA_FOR_SCHEME: dict[str, str] = {"s3": "s3", "gs": "gcs", "az": "azure"}
 
+#: The pip distribution that provides each client module. Shared verbatim with the CLI.
+_PACKAGE_FOR_MODULE: dict[str, str] = {
+    "boto3": "boto3",
+    "google.cloud.storage": "google-cloud-storage",
+    "azure.storage.blob": "azure-storage-blob",
+    "azure.identity": "azure-identity",
+}
+
+#: The ``pip install`` argument that installs everything a scheme needs, in one command.
+#: Named in every message instead of the extras: a user who installed the SDK the normal way
+#: has no reason to know what an extra is. Shared verbatim with the CLI.
+_PACKAGES_FOR_SCHEME: dict[str, str] = {
+    "s3": "boto3",
+    "gs": "google-cloud-storage",
+    "az": "azure-storage-blob azure-identity",
+}
+
 
 @dataclass(frozen=True)
 class StoreURI:
@@ -52,6 +69,11 @@ class StoreURI:
     def extra(self) -> str:
         """The pip extra that installs this scheme's client library."""
         return _EXTRA_FOR_SCHEME[self.scheme]
+
+    @property
+    def packages(self) -> str:
+        """The ``pip install`` argument to install this scheme's client library."""
+        return _PACKAGES_FOR_SCHEME[self.scheme]
 
 
 def parse_store_uri(uri: str) -> StoreURI:
@@ -96,7 +118,7 @@ def parse_store_uri(uri: str) -> StoreURI:
 
 
 #: Every module a scheme's adapter imports on its first put. Azure needs two: the blob client and
-#: ``azure.identity`` for ``DefaultAzureCredential`` -- both ship in the ``[azure]`` extra.
+#: ``azure.identity`` for ``DefaultAzureCredential`` -- both installed by one pip command.
 _REQUIRED_MODULES: dict[str, tuple[str, ...]] = {
     "s3": ("boto3",),
     "gs": ("google.cloud.storage",),
@@ -104,14 +126,28 @@ _REQUIRED_MODULES: dict[str, tuple[str, ...]] = {
 }
 
 
-class MissingExtraError(ImportError):
-    """The client library for a store URI's scheme is not installed."""
+class MissingStoreDependencyError(ImportError):
+    """The client library for a store scheme is not installed.
 
-    def __init__(self, parsed: StoreURI, module: str) -> None:
-        self.extra = parsed.extra
+    Attributes:
+        scheme: ``"s3"``, ``"gs"`` or ``"az"``.
+        module: The first module that could not be found.
+        package: The pip distribution that provides ``module``.
+        packages: The ``pip install`` argument that installs everything the scheme needs.
+        extra: The pip extra that pins the same packages, for callers that prefer it.
+
+    The message names ``package`` and ``packages`` only -- never an extra, never a URI.
+    """
+
+    def __init__(self, scheme: Scheme, module: str) -> None:
+        self.scheme = scheme
+        self.module = module
+        self.package = _PACKAGE_FOR_MODULE[module]
+        self.packages = _PACKAGES_FOR_SCHEME[scheme]
+        self.extra = _EXTRA_FOR_SCHEME[scheme]
         super().__init__(
-            f"{parsed.scheme}:// store needs the optional dependency {module!r}; "
-            f'install it with: pip install "evalshift-sdk[{parsed.extra}]"'
+            f"{scheme}:// store needs {self.package}, which is not installed; "
+            f"run: pip install {self.packages}"
         )
 
 
@@ -123,18 +159,26 @@ def _installed(module: str) -> bool:
         return False
 
 
+def require_store_modules(scheme: Scheme) -> None:
+    """Raise :class:`MissingStoreDependencyError` if any needed module is not importable.
+
+    Uses ``importlib.util.find_spec`` only; safe at process start and store construction.
+    """
+    for module in _REQUIRED_MODULES[scheme]:
+        if not _installed(module):
+            raise MissingStoreDependencyError(scheme, module)
+
+
 def open_store(uri: str) -> ObjectStore:
     """Parse ``uri`` and return the matching store, without building its client yet.
 
     Raises:
         ValueError: when ``uri`` does not match the grammar (see :func:`parse_store_uri`).
-        MissingExtraError: when a module the scheme's adapter needs is not installed; it names
-            the first missing one.
+        MissingStoreDependencyError: when a needed module is not installed; it names the
+            first missing one and the package to install.
     """
     parsed = parse_store_uri(uri)
-    for module in _REQUIRED_MODULES[parsed.scheme]:
-        if not _installed(module):
-            raise MissingExtraError(parsed, module)
+    require_store_modules(parsed.scheme)
     if parsed.scheme == "s3":
         from evalshift.stores.s3 import S3Store
 
@@ -150,9 +194,10 @@ def open_store(uri: str) -> ObjectStore:
 
 __all__ = [
     "STORE_URI_FORMS",
-    "MissingExtraError",
+    "MissingStoreDependencyError",
     "Scheme",
     "StoreURI",
     "open_store",
     "parse_store_uri",
+    "require_store_modules",
 ]
