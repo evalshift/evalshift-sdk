@@ -79,6 +79,25 @@ def test_env_sink_missing_extra_warns_and_falls_back(
     assert 'pip install "evalshift-sdk[s3]"' in warning.message
 
 
+def test_env_sink_unexpected_error_warns_once_and_falls_back(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Anything open_store raises beyond its documented errors must not leave EVALSHIFT_SINK
+    # silently ignored -- and the warning must quote neither the value nor the exception text.
+    def _raise(uri: str) -> object:
+        raise RuntimeError(f"boom {uri}")
+
+    monkeypatch.setattr(cfg, "open_store", _raise)
+    monkeypatch.setenv("EVALSHIFT_SINK", "s3://bucket/SECRETPREFIX")
+    with caplog.at_level(logging.DEBUG, logger="evalshift"):
+        reset_config()
+    assert isinstance(_unwrap(active_sink()), FileSink)
+    [warning] = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert "EVALSHIFT_SINK" in warning.getMessage()
+    assert "local disk" in warning.getMessage()
+    assert all("SECRETPREFIX" not in r.getMessage() and not r.exc_info for r in caplog.records)
+
+
 @pytest.mark.parametrize(
     ("value", "secret"),
     [

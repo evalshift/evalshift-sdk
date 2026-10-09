@@ -118,7 +118,8 @@ def _env_sink() -> Sink | None:
     inline credentials would otherwise leak into logs. Several of the parser's grammar errors
     quote the URI they reject, so a ``ValueError`` gets a fixed message naming only the accepted
     forms. A :class:`~evalshift.stores.uri.MissingExtraError` is logged as-is: its text names
-    only the scheme, the missing module and the pip extra to install.
+    only the scheme, the missing module and the pip extra to install. Any other exception gets
+    a fixed warning too, without its text.
     """
     raw = os.environ.get(SINK_ENV, "").strip()
     if not raw:
@@ -137,6 +138,15 @@ def _env_sink() -> Sink | None:
             "captures are written to local disk instead",
             SINK_ENV,
             STORE_URI_FORMS,
+        )
+    except Exception:
+        # Not a grammar or missing-extra error, so its text is unknown and may quote the value:
+        # log a fixed line only. Without this the outer guard would swallow it at debug and
+        # EVALSHIFT_SINK would be ignored silently.
+        safety.logger.warning(
+            "evalshift: %s could not be opened (unexpected error); "
+            "captures are written to local disk instead",
+            SINK_ENV,
         )
     return None
 

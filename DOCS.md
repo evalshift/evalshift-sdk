@@ -660,7 +660,7 @@ EVALSHIFT_CAPTURE=1 EVALSHIFT_SINK=s3://acme-evals/support-agent python agent.py
 | `gs://<bucket>/<prefix>` | Google Cloud Storage | `[gcs]` | Workload Identity / Cloud Run service account; `gcloud auth application-default login` locally |
 | `az://<account>/<container>/<prefix>` | Azure Blob Storage (`https://<account>.blob.core.windows.net`) | `[azure]` | Managed Identity; `az login` locally |
 
-`<prefix>` is optional. Credentials never go in the URI — a URI containing `@` or `?` is rejected, and the error does not echo it back. If `EVALSHIFT_SINK` is invalid or its extra is missing, the SDK logs one warning (naming the variable and the accepted forms, or the pip extra to install — never the value) and keeps writing to local disk.
+`<prefix>` is optional. Credentials never go in the URI — a URI containing `@` or `?` is rejected, and the error does not echo it back. If `EVALSHIFT_SINK` is invalid, its extra is missing, or the store cannot be opened for any other reason, the SDK logs one warning (naming the variable and the accepted forms, or the pip extra to install — never the value) and keeps writing to local disk.
 
 **The keys are the local layout.** Under your prefix the sink writes exactly what `FileSink` and `ToolsetSink` write to disk — `captures/<suite>/cap_<hex>.json` and `toolsets/<hex>.json` — so the CLI can mirror the bucket into `.evalshift/` and read it unchanged (`evalshift capture sync` does this automatically once `captures.store` is set in `evalshift.yaml`; see the CLI docs). Until your CLI version supports `captures.store`, `aws s3 sync` / `gcloud storage rsync` / `azcopy sync` into a local `.evalshift/` followed by `evalshift capture sync` works the same way.
 
