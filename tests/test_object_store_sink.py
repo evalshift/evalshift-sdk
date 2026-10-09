@@ -101,6 +101,19 @@ def test_put_failure_first_warning_then_debug(caplog: pytest.LogCaptureFixture) 
     assert "PermissionError" in puts[0].message
 
 
+def test_put_failure_names_what_was_dropped(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.DEBUG, logger="evalshift"):
+        ObjectStoreSink(RaisingStore(), background=False).write(_envelope())
+        ObjectStoreSink(RaisingStore(), background=False).write_toolset(
+            TOOLS, fingerprint_tools(TOOLS)
+        )
+    capture_msg, sidecar_msg = [
+        r.message for r in caplog.records if "object store put" in r.message
+    ]
+    assert "(capture dropped)" in capture_msg
+    assert "(toolset sidecar dropped)" in sidecar_msg
+
+
 def test_store_property_exposes_the_store() -> None:
     store = MemoryStore()
     assert ObjectStoreSink(store, background=False).store is store

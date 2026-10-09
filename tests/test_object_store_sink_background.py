@@ -91,6 +91,41 @@ def test_full_queue_drops_newest_without_raising(caplog: pytest.LogCaptureFixtur
     assert any("queue full" in r.message for r in caplog.records)
 
 
+def test_queue_full_log_is_emitted_outside_the_sink_lock() -> None:
+    # A host log handler that re-enters capture would deadlock on the non-reentrant lock.
+    store = GatedStore()
+    sink = ObjectStoreSink(store, queue_size=1)
+    lock_free_during_log: list[bool] = []
+
+    class Probe(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            if "queue full" in record.getMessage():
+                acquired = sink._lock.acquire(blocking=False)
+                if acquired:
+                    sink._lock.release()
+                lock_free_during_log.append(acquired)
+
+    probe = Probe(level=logging.DEBUG)
+    evalshift_logger = logging.getLogger("evalshift")
+    previous_level = evalshift_logger.level
+    evalshift_logger.addHandler(probe)
+    evalshift_logger.setLevel(logging.DEBUG)
+    try:
+        sink.write(_envelope("cap_1"))
+        for _ in range(100):
+            if sink._queue.empty():
+                break
+            threading.Event().wait(0.01)
+        sink.write(_envelope("cap_2"))
+        sink.write(_envelope("cap_3"))
+    finally:
+        evalshift_logger.removeHandler(probe)
+        evalshift_logger.setLevel(previous_level)
+        store.gate.set()
+    assert sink.flush(timeout=5)
+    assert lock_free_during_log == [True]
+
+
 def test_write_toolset_returns_none_when_dropped() -> None:
     store = GatedStore()
     sink = ObjectStoreSink(store, queue_size=1)

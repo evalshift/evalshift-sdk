@@ -151,10 +151,15 @@ class ObjectStoreSink:
             try:
                 self._queue.put_nowait((key, data, fingerprint))
             except queue.Full:
-                logger.debug("evalshift: object store queue full; dropped %s", key)
-                return False
-            self._pending += 1
-        return True
+                accepted = False
+            else:
+                accepted = True
+                self._pending += 1
+        if not accepted:
+            # Logged after releasing the lock: a host log handler that re-enters capture would
+            # otherwise deadlock on it.
+            logger.debug("evalshift: object store queue full; dropped %s", key)
+        return accepted
 
     def _put(self, key: str, data: bytes) -> bool:
         """One ``store.put``, fail-open. First failure per sink is a WARNING, later ones debug."""
@@ -166,11 +171,12 @@ class ObjectStoreSink:
                 first = self._failures == 1
             logger.log(
                 logging.WARNING if first else logging.DEBUG,
-                "evalshift: object store put to %s failed for %s: %s: %s (capture dropped)",
+                "evalshift: object store put to %s failed for %s: %s: %s (%s dropped)",
                 getattr(self._store, "uri", "<store>"),
                 key,
                 type(exc).__name__,
                 exc,
+                "toolset sidecar" if key.startswith("toolsets/") else "capture",
                 exc_info=not first,
             )
             return False
