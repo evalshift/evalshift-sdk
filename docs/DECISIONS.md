@@ -532,13 +532,16 @@ them. `ObjectStoreSink` (`sinks/object_store.py`) writes to any `ObjectStore` (`
   `put`, typed `Any`, library imported inside the method. Extras `[s3]`, `[gcs]`, `[azure]`;
   `dependencies = []` holds (D-deps). No `fsspec`: it pins botocore aggressively and pulls async
   stacks, too heavy for an embedded SDK.
-- **Background queue, bounded, drop-newest on overflow**; one daemon worker; `flush(timeout)`
-  registered with `atexit` on first background write. The SDK installs **no signal handlers** --
-  a host that is stopped by `SIGTERM` must `sys.exit(0)` from its own handler or call
-  `flush_captures()`.
+- **Background queue, bounded, drop-newest on overflow**; one daemon worker; an exit flush
+  (`flush_timeout`) registered with `atexit` on first background write, which logs one `WARNING`
+  if it times out with items pending. The SDK installs **no signal handlers** -- a host that is
+  stopped by `SIGTERM` must `sys.exit(0)` from its own handler (so the `atexit` flush runs
+  outside it) or call `flush_captures()` from a shutdown hook. Never from inside the signal
+  handler: it would block forever on the sink's non-reentrant lock if the signal landed while
+  the main thread held it.
 - **No retry layer**: the cloud clients retry already.
-- **Warning-level logging, deliberately**: the first failed put per sink, and an invalid or
-  unusable `EVALSHIFT_SINK`, log at `WARNING` rather than the capture path's usual `debug`,
+- **Warning-level logging, deliberately**: the first failed put per sink, an exit flush that
+  times out with items pending, and an invalid or unusable `EVALSHIFT_SINK`, log at `WARNING` rather than the capture path's usual `debug`,
   because a silently dropped firehose on an ephemeral host is exactly the loss this feature
   exists to prevent. Later put failures on the same sink drop back to `debug`.
 - **Sidecar routing**: `config.toolset_writer()` returns the object sink's `write_toolset` when

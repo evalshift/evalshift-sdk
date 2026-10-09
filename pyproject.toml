@@ -69,7 +69,7 @@ dev = [
     "anthropic>=0.40",
     "google-genai>=1.0",
     # Object-store adapters (D-stores): unit tests drive stub clients and need none of these;
-    # they are here so mypy sees the modules and the opt-in real-bucket smoke test can run.
+    # they are here so mypy sees the modules and the `open_store` dispatch tests can import them.
     "boto3>=1.34",
     "google-cloud-storage>=2.14",
     "azure-storage-blob>=12.19",

@@ -290,7 +290,11 @@ def toolset_writer() -> ToolsetWriter:
 def flush_captures(timeout: float | None = None) -> bool:
     """Wait for a background :class:`ObjectStoreSink` to finish uploading; ``True`` otherwise.
 
-    Call this from a ``SIGTERM`` handler or at the end of a Lambda invocation. Sinks with
+    Call this from your own shutdown hook (a server's lifespan shutdown, a worker's stop
+    callback) or before a Lambda handler returns. Do not call it from inside a signal handler:
+    the handler runs on the main thread and blocks forever on the sink's lock if the signal
+    landed while the main thread held it. For ``SIGTERM``, install a handler that calls
+    ``sys.exit(0)`` instead; the ``atexit`` flush then runs outside the handler. Sinks with
     nothing to flush -- ``FileSink``, ``MemorySink`` (whose own ``flush`` *drains* and is
     deliberately not called), custom sinks -- return ``True`` immediately.
     """

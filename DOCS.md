@@ -675,7 +675,7 @@ import signal, sys
 signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))   # SystemExit → atexit → flush
 ```
 
-or call `evalshift.flush_captures(timeout=10)` from your own shutdown hook. On **Lambda**, background threads freeze between invocations: call `flush_captures()` before the handler returns, or configure the sink inline:
+or call `evalshift.flush_captures(timeout=10)` from your own shutdown hook — not from inside the signal handler itself, where it can deadlock on the sink's lock. On **Lambda**, background threads freeze between invocations: call `flush_captures()` before the handler returns, or configure the sink inline:
 
 ```python
 from evalshift import ObjectStoreSink, configure
@@ -1096,7 +1096,7 @@ ObjectStoreSink.flush(timeout: float | None = None) -> bool
 ObjectStoreSink.store -> ObjectStore
 ```
 
-Stores: `evalshift.stores.s3.S3Store(bucket, prefix="", *, client=None)`, `evalshift.stores.gcs.GCSStore(bucket, prefix="", *, client=None)`, `evalshift.stores.azure.AzureBlobStore(account, container, prefix="", *, client=None)`; each has `put` and a `uri` attribute and builds its client on first use. `open_store(uri) -> ObjectStore` dispatches on the scheme and raises `MissingExtraError` (an `ImportError` naming the pip extra) when the client library is absent; `parse_store_uri(uri) -> StoreURI` validates the grammar alone.
+Stores: `evalshift.stores.s3.S3Store(bucket, prefix="", *, client=None)`, `evalshift.stores.gcs.GCSStore(bucket, prefix="", *, client=None)`, `evalshift.stores.azure.AzureBlobStore(account, container, prefix="", *, client=None)`; each has `put` and a `uri` attribute and builds its client on first use. `open_store(uri) -> ObjectStore` dispatches on the scheme and raises `MissingExtraError` (an `ImportError` naming the pip extra) when a module the scheme needs is absent (for `az://`, `azure-storage-blob` or `azure-identity`); `parse_store_uri(uri) -> StoreURI` validates the grammar alone.
 
 ### `flush_captures`
 
@@ -1104,7 +1104,7 @@ Stores: `evalshift.stores.s3.S3Store(bucket, prefix="", *, client=None)`, `evals
 flush_captures(timeout: float | None = None) -> bool
 ```
 
-Waits for a background `ObjectStoreSink` to finish uploading; returns `True` immediately for any other sink. For `SIGTERM` handlers and Lambda.
+Waits for a background `ObjectStoreSink` to finish uploading; returns `True` immediately for any other sink. For shutdown hooks and Lambda. Do not call it from inside a signal handler — it can deadlock on the sink's lock; for `SIGTERM`, have the handler call `sys.exit(0)` so the `atexit` flush runs outside it.
 
 ### `load_capture`
 
@@ -1181,8 +1181,9 @@ Work down this checklist:
 5. **`require_model_call` dropped it** — the gate is on and the run recorded no `model_call` event.
 6. **Redactor raised** — a raising redactor drops the capture fail-closed.
 7. **Filesystem error** — read-only mount / disk full; the write degrades silently. Use `MemorySink` on read-only filesystems.
+8. **Object store upload dropped it** — with `EVALSHIFT_SINK` / an `ObjectStoreSink` nothing is written locally; look in the bucket and in the logs. The first failed upload per sink logs a `WARNING` with the store URI and the error (wrong credentials, missing bucket); later failures are `debug`. An exit flush that times out logs a `WARNING` naming the store and how many items were dropped. A full upload queue drops the newest item with a `debug` line. A process stopped by `SIGTERM` without `sys.exit(0)` skips the exit flush entirely, with no log at all — see [Shutdown](#objectstoresink-and-cloud-stores).
 
-Drops from `require_model_call`, a raising redactor, or a filesystem error each log one `debug` line. Gate-off, sampling and dedup drops are silent — rule them out with the checklist above. Turn on the logger to see which branch fired:
+Drops from `require_model_call`, a raising redactor, a filesystem error or a full upload queue each log one `debug` line; a failed upload or a timed-out exit flush logs a `WARNING`. Gate-off, sampling and dedup drops are silent — rule them out with the checklist above. Turn on the logger to see which branch fired:
 
 ```python
 import logging

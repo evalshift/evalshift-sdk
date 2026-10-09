@@ -248,7 +248,8 @@ ObjectStoreSink(store: ObjectStore, *, background: bool = True, queue_size: int 
   put per sink logs WARNING with store uri, later debug; never raises. atexit flush registered
   on first background write, waits flush_timeout; if it times out it logs one WARNING with the
   store uri and the number of items still pending (dropped) -- but SIGTERM skips atexit: install signal.signal(SIGTERM, lambda *_:
-  sys.exit(0)) or call evalshift.flush_captures(timeout) in your shutdown hook; on Lambda call
+  sys.exit(0)) or call evalshift.flush_captures(timeout) in your shutdown hook (never inside a
+  signal handler: it can deadlock on the sink's lock); on Lambda call
   flush_captures() before returning or use background=False. No retry layer (clients retry).
   GC/max_captures/capture_ttl do not apply -> bucket lifecycle rules. Dedup still applies.
 ObjectStore (protocol, evalshift.stores): put(key: str, data: bytes) -> None
@@ -424,8 +425,9 @@ evalshift.capture.requested.extract_requested_tool_calls(response: Any) -> list[
 - Drops from require_model_call, a raising redactor, or a filesystem error each log one
   logging.getLogger("evalshift") debug line. Gate-off, sampling, and dedup drops are silent.
 - Deliberate WARNING-level exceptions to debug-only logging: an invalid/unusable EVALSHIFT_SINK
-  (once, at config construction), the first failed put per ObjectStoreSink, and a newer-minor
-  schema read by load_capture/load_envelope.
+  (once, at config construction), the first failed put per ObjectStoreSink, an ObjectStoreSink
+  exit flush that times out with items pending, and a newer-minor schema read by
+  load_capture/load_envelope.
 - retrieval / guardrail / final_output event types exist in the schema but have NO public
   recording API in the manual surface; only the LangChain adapter (retrieval, final_output) and
   internals emit them. Do not document them as user-recordable.
@@ -600,9 +602,12 @@ except MigrationError as e:                 # read path raises; it does NOT fail
 Check in order: (1) EVALSHIFT_CAPTURE not truthy; (2) wrong CWD — default .evalshift is
 CWD-relative, set EVALSHIFT_DIR; (3) dedup collapsed it (classic: agent_session without
 agent_input); (4) sampling skipped it; (5) require_model_call dropped it; (6) redactor raised
-(fail-closed); (7) filesystem OSError (use MemorySink on read-only mounts). Only (5)-(7) log at
-logging.getLogger("evalshift") debug level — (1)-(4) are silent; rule them out first, then enable
-logging.getLogger("evalshift").setLevel(logging.DEBUG) to see which of (5)-(7) fired.
+(fail-closed); (7) filesystem OSError (use MemorySink on read-only mounts); (8) ObjectStoreSink
+dropped it -- nothing local, check the bucket and the logs: first failed put per sink -> WARNING
+with store uri + error (later puts debug); exit flush timed out -> WARNING with store uri + items
+pending; queue full -> debug; SIGTERM without sys.exit(0) skips the exit flush silently. (5)-(7)
+and a full queue log at logging.getLogger("evalshift") debug level — (1)-(4) are silent; rule them
+out first, then enable logging.getLogger("evalshift").setLevel(logging.DEBUG) to see which fired.
 
 Read-only filesystem / Lambda: prefer EVALSHIFT_SINK=s3://|gs://|az://... (capture AND sidecar go
 to the bucket, nothing touches disk; call flush_captures() before the Lambda handler returns).
