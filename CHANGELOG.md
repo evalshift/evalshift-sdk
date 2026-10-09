@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **An unusable `EVALSHIFT_SINK` now raises instead of falling back to local disk.** When
+  `EVALSHIFT_CAPTURE` is on and the value names a store the SDK cannot build — its client
+  library is not installed, or the URI is malformed — the first `capture.*` decorator, client
+  wrapper (`wrap_openai` / `wrap_anthropic` / `wrap_genai`), `EvalShiftCallbackHandler()` or
+  `configure()` without a `sink` raises `SinkConfigurationError` (new, exported from
+  `evalshift`), naming the variable, the scheme and the fix. In a real agent that is process
+  start. Bare `import evalshift` never raises, and with capture off nothing happens. If the gate
+  turns on only after that, captures are dropped with one `WARNING` rather than written to disk.
+  Previously the SDK logged one warning and wrote to local disk, which on the ephemeral hosts
+  this feature exists for lost every capture behind a green deploy.
+- Every message names the package to install, not a pip extra: `pip install boto3`,
+  `google-cloud-storage`, `azure-storage-blob azure-identity` (both Azure packages in one
+  command). The `[s3]` / `[gcs]` / `[azure]` extras still exist as tested version floors but
+  are no longer documented. `evalshift.stores.uri.MissingExtraError` is renamed
+  `MissingStoreDependencyError` (still an `ImportError`; new `.package` / `.packages`), and a
+  store constructed without a `client` (`S3Store(...)` etc.) raises it at construction instead
+  of failing its first background upload.
+
 ## [0.5.0] - 2026-10-09
 
 ### Added
