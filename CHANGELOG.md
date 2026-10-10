@@ -9,7 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **An unusable `EVALSHIFT_SINK` now raises instead of falling back to local disk.** When
+- **`EVALSHIFT_SINK` is now `EVALSHIFT_CAPTURE_STORE`.** The variable names the store your
+  captures go to, matching the CLI's `captures.store` for the same bucket; the old name
+  described an internal class. `EVALSHIFT_SINK` keeps working, silently, whenever
+  `EVALSHIFT_CAPTURE_STORE` is unset or blank, and every error names whichever variable you
+  set. `evalshift.config.SINK_ENV` is replaced by `CAPTURE_STORE_ENV` and `LEGACY_SINK_ENV`.
+- **An unusable `EVALSHIFT_CAPTURE_STORE` now raises instead of falling back to local disk.** When
   `EVALSHIFT_CAPTURE` is on and the value names a store the SDK cannot build — its client
   library is not installed, or the URI is malformed — the first `capture.*` decorator, client
   wrapper (`wrap_openai` / `wrap_anthropic` / `wrap_genai`), `EvalShiftCallbackHandler()` or

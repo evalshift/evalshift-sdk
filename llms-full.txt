@@ -11,7 +11,7 @@ Object stores: pip install boto3 (s3://) | google-cloud-storage (gs://) | azure-
 
 Purpose: in-process capture SDK for AI agents. Wraps agent invocations, tool calls, and model
 calls; records each run as a span tree; serializes to a JSON capture envelope written to
-<base>/captures/<suite>/cap_<hex>.json on local disk, or (EVALSHIFT_SINK=s3://|gs://|az://...)
+<base>/captures/<suite>/cap_<hex>.json on local disk, or (EVALSHIFT_CAPTURE_STORE=s3://|gs://|az://...)
 to an object store the user owns -- never to EvalShift.
 Captures are consumed by the separate evalshift CLI
 (https://github.com/evalshift/evalshift-cli); the layout (captures/<suite>/cap_<hex>.json +
@@ -41,7 +41,7 @@ Safety model (four distinct rules):
    half-masked). The host agent is unaffected.
 3. READ PATH RAISES: load_capture/load_envelope raise typed MigrationError subclasses; they do
    not fail open.
-4. SINK CONFIGURATION RAISES AT STARTUP: an unusable EVALSHIFT_SINK (library missing, bad URI)
+4. SINK CONFIGURATION RAISES AT STARTUP: an unusable EVALSHIFT_CAPTURE_STORE (library missing, bad URI)
    raises SinkConfigurationError at the first capture.* decorator / client wrapper / LangChain
    handler / configure() while EVALSHIFT_CAPTURE is on; never on bare import, never with capture
    off.
@@ -56,11 +56,11 @@ Safety model (four distinct rules):
 | EVALSHIFT_CAPTURE_TTL | off | Evict capture files older than N seconds. | Config construction |
 | EVALSHIFT_DEDUP | on | Per-process dedup keyed (suite, input_hash). | Config construction |
 | EVALSHIFT_SAMPLE_RATE | off (capture all) | Fraction of runs to capture (0.0-1.0), decided once per agent invocation. | Config construction |
-| EVALSHIFT_SINK | unset (disk) | Ship captures to s3://<bucket>/<prefix>, gs://<bucket>/<prefix> or az://<account>/<container>/<prefix>; needs the provider's client library (pip install boto3 / google-cloud-storage / azure-storage-blob azure-identity). Unusable value (library missing, bad URI) -> recorded at import, raised as SinkConfigurationError by the first capture.* decorator / client wrapper / LangChain handler / configure() while EVALSHIFT_CAPTURE is on; never on bare import, never with capture off; if the gate turns on later, captures are dropped with ONE warning (never written to disk instead). Message names the var, scheme and package, never the value. | Config construction |
+| EVALSHIFT_CAPTURE_STORE | unset (disk) | Ship captures to s3://<bucket>/<prefix>, gs://<bucket>/<prefix> or az://<account>/<container>/<prefix>; needs the provider's client library (pip install boto3 / google-cloud-storage / azure-storage-blob azure-identity). Unusable value (library missing, bad URI) -> recorded at import, raised as SinkConfigurationError by the first capture.* decorator / client wrapper / LangChain handler / configure() while EVALSHIFT_CAPTURE is on; never on bare import, never with capture off; if the gate turns on later, captures are dropped with ONE warning (never written to disk instead). Message names the var, scheme and package, never the value. EVALSHIFT_SINK (0.5.0 name) still works when this is unset. | Config construction |
 
 "Uncapped/off" literal set for numeric knobs: {"0","none","unlimited","off"} (also empty string).
 Precedence: explicit configure(...) > env var > built-in default. Malformed env values for the
-hygiene knobs fail open to the default; EVALSHIFT_SINK is the exception -- an unusable value
+hygiene knobs fail open to the default; EVALSHIFT_CAPTURE_STORE is the exception -- an unusable value
 raises SinkConfigurationError at startup while capture is on (row above). Negative or zero ints
 -> uncapped (None).
 Disable EVALSHIFT_DEDUP with "off" (or "0"/"none"); "false"/"no" are not recognised and leave
@@ -209,7 +209,7 @@ configure(*, sink: Sink | None = UNSET, sample_rate: float | None = UNSET, dedup
           max_captures: int | None = UNSET, capture_ttl: float | None = UNSET,
           require_model_call: bool = UNSET) -> None
   Process-wide options, MERGE semantics: only passed kwargs change. None = disabled/unset for
-  sink/sample_rate/max_captures/capture_ttl. sink defaults from EVALSHIFT_SINK when set. There is NO redact knob — configure(redact=...) was
+  sink/sample_rate/max_captures/capture_ttl. sink defaults from EVALSHIFT_CAPTURE_STORE when set. There is NO redact knob — configure(redact=...) was
   removed in 0.3.0; masking is required per capture point instead. require_model_call=True drops captures with
   no model_call event (persistence gate for eval-grade capture; off by default).
 
@@ -433,7 +433,7 @@ evalshift.capture.requested.extract_requested_tool_calls(response: Any) -> list[
   metadata["evalshift"], envelope fields (capture_id, suite, code_version, input_hash).
 - Drops from require_model_call, a raising redactor, or a filesystem error each log one
   logging.getLogger("evalshift") debug line. Gate-off, sampling, and dedup drops are silent.
-- Deliberate WARNING-level exceptions to debug-only logging: an invalid/unusable EVALSHIFT_SINK
+- Deliberate WARNING-level exceptions to debug-only logging: an invalid/unusable EVALSHIFT_CAPTURE_STORE
   (once, at config construction), the first failed put per ObjectStoreSink, an ObjectStoreSink
   exit flush that times out with items pending, and a newer-minor schema read by
   load_capture/load_envelope.
@@ -618,7 +618,7 @@ pending; queue full -> debug; SIGTERM without sys.exit(0) skips the exit flush s
 and a full queue log at logging.getLogger("evalshift") debug level — (1)-(4) are silent; rule them
 out first, then enable logging.getLogger("evalshift").setLevel(logging.DEBUG) to see which fired.
 
-Read-only filesystem / Lambda: prefer EVALSHIFT_SINK=s3://|gs://|az://... (capture AND sidecar go
+Read-only filesystem / Lambda: prefer EVALSHIFT_CAPTURE_STORE=s3://|gs://|az://... (capture AND sidecar go
 to the bucket, nothing touches disk; call flush_captures() before the Lambda handler returns).
 Otherwise MemorySink (or EVALSHIFT_DIR at a writable mount, e.g. /tmp) fixes
 the capture envelope, but do the EVALSHIFT_DIR part regardless -- toolset sidecars are

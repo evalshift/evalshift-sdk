@@ -518,7 +518,8 @@ by `GENERATION_KEYS`) and `requested_tool_calls` (via `extract_requested_tool_ca
 ### D-stores — ship captures to a user-owned bucket; layout is the interface
 Production hosts are ephemeral (Fargate, Lambda, pods) and a capture on their disk dies with
 them. `ObjectStoreSink` (`sinks/object_store.py`) writes to any `ObjectStore` (`stores/base.py`:
-`put(key, bytes)`), selected by `EVALSHIFT_SINK=<uri>` or `configure(sink=...)`.
+`put(key, bytes)`), selected by `EVALSHIFT_SINK=<uri>` (renamed `EVALSHIFT_CAPTURE_STORE`, see
+D-stores-c) or `configure(sink=...)`.
 
 - **Keys are the local layout** (`captures/<safe_suite>/cap_<hex>.json`, `toolsets/<hex>.json`),
   so the CLI mirrors a bucket into `.evalshift/` and reads it unchanged. The documented contract
@@ -554,7 +555,7 @@ them. `ObjectStoreSink` (`sinks/object_store.py`) writes to any `ObjectStore` (`
 - **GC does not apply** (`write` returns `None`); bucket lifecycle rules replace it. Dedup still
   applies, per process.
 
-### D-stores-b — an unusable `EVALSHIFT_SINK` raises at startup; it is never replaced by disk
+### D-stores-b — an unusable `EVALSHIFT_CAPTURE_STORE` raises at startup; it is never replaced by disk
 A warning on a green deploy is read by nobody, and a sink the user asked for and did not get is
 the loss D-stores exists to prevent. So configuration is a third carve-out from fail-open (with
 redaction and the read side): `_Config` records a `SinkConfigurationError` at import and
@@ -568,6 +569,14 @@ to local disk. Messages name packages, not extras (`pip install boto3`), because
 installed the SDK normally does not know what an extra is, and `"evalshift-sdk[s3]"` needs quotes
 in zsh. Runtime faults (puts, queue, exit flush) stay fail-open. `MissingExtraError` became
 `MissingStoreDependencyError`, no alias (0.5.0 was one day old).
+
+### D-stores-c — `EVALSHIFT_SINK` is renamed `EVALSHIFT_CAPTURE_STORE`
+"Sink" is the SDK's internal word for where a finished capture goes; a user setting the
+variable thinks "where do my captures go", and the CLI already calls the same bucket
+`captures.store`. One word on both sides: `EVALSHIFT_CAPTURE_STORE`. `EVALSHIFT_SINK` (0.5.0)
+stays a silent alias read only when the new name is unset or blank (no deprecation warning:
+one day of exposure does not justify log noise), and `_store_env()` returns the variable name
+with the value so every `SinkConfigurationError` names the one the user set.
 
 ## Open follow-ups (not blocking v1)
 - ~~**D1-followup:** unify packaging so CLI + SDK co-install cleanly~~ — resolved 2026-09-09 in

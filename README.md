@@ -46,7 +46,7 @@ pip install "evalshift-sdk[anthropic]"     # anthropic>=0.40
 pip install "evalshift-sdk[google-genai]"  # google-genai>=1.0
 ```
 
-Optional object-store sinks (`EVALSHIFT_SINK=s3://…` / `gs://…` / `az://…`, see below) use the
+Optional object stores (`EVALSHIFT_CAPTURE_STORE=s3://…` / `gs://…` / `az://…`, see below) use the
 provider's own client library — install it like any other package:
 
 ```bash
@@ -110,15 +110,16 @@ On Fargate, Lambda or Kubernetes the capture directory disappears with the task.
 to an object store you own instead — one env var next to the gate, no code change:
 
 ```bash
-EVALSHIFT_CAPTURE=1 EVALSHIFT_SINK=s3://acme-evals/support-agent python agent.py
+EVALSHIFT_CAPTURE=1 EVALSHIFT_CAPTURE_STORE=s3://acme-evals/support-agent python agent.py
 ```
 
-`s3://<bucket>/<prefix>` (also MinIO, R2, B2 via `AWS_ENDPOINT_URL`), `gs://<bucket>/<prefix>` and
+SDK 0.5.0 called this variable `EVALSHIFT_SINK`; that name still works when
+`EVALSHIFT_CAPTURE_STORE` is unset. `s3://<bucket>/<prefix>` (also MinIO, R2, B2 via `AWS_ENDPOINT_URL`), `gs://<bucket>/<prefix>` and
 `az://<account>/<container>/<prefix>` are accepted; install the provider's client library (above).
 Credentials come from each provider's default chain, never from the URI.
 
 Uploads run on a bounded background thread and never raise into the agent. Configuration is the
-one thing that does raise: if `EVALSHIFT_SINK` is set but the library is missing or the value is
+one thing that does raise: if `EVALSHIFT_CAPTURE_STORE` is set but the library is missing or the value is
 malformed, the first `capture.*` decorator, client wrapper or `configure()` call raises
 `SinkConfigurationError` — at startup, naming the `pip install` to run — instead of quietly
 writing to local disk. With `EVALSHIFT_CAPTURE` off nothing happens at all. The keys mirror the
