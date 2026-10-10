@@ -6,7 +6,7 @@ Also covers MinIO, Cloudflare R2, Backblaze B2 and Ceph: boto3 honours ``AWS_END
 natively, so no endpoint knob is needed here. Credentials come from boto3's default chain --
 on ECS/Fargate the task role, on EC2 the instance profile, locally ``aws sso login`` or the
 usual env vars. The client is built on the first ``put``, never at construction, so parsing
-``EVALSHIFT_SINK`` at process start touches neither the network nor the credential chain.
+``EVALSHIFT_CAPTURE_STORE`` at process start touches neither the network nor the credential chain.
 """
 
 from __future__ import annotations

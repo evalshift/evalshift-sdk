@@ -320,8 +320,8 @@ def wrap_anthropic(client: C) -> C:
     own type purely for editor ergonomics (like ``wrap_openai`` / ``wrap_genai``).
 
     Raises:
-        ~evalshift.SinkConfigurationError: when capture is on and ``EVALSHIFT_SINK`` cannot be
-            built.
+        ~evalshift.SinkConfigurationError: when capture is on and ``EVALSHIFT_CAPTURE_STORE``
+            cannot be built.
     """
     config.require_sink_ready()  # a sink the SDK cannot build fails here, at startup
     return cast(C, _AnthropicProxy(client))

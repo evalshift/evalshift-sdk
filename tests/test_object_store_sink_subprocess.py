@@ -24,8 +24,13 @@ def _run_child(
     If ``expect_success`` is True (default), fail the test if it exits non-zero.
     If False, return the result without checking the exit code.
     """
-    # Start from the parent's env minus any EVALSHIFT_SINK it may carry; ``env`` sets it per test.
-    child_env = {k: v for k, v in os.environ.items() if k != "EVALSHIFT_SINK"}
+    # Start from the parent's env minus any store variable it may carry (the current name and the
+    # 0.5.0 one); ``env`` sets them per test.
+    child_env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("EVALSHIFT_CAPTURE_STORE", "EVALSHIFT_SINK")
+    }
     child_env.update(env or {})
     if pythonpath is not None:
         existing = child_env.get("PYTHONPATH")
@@ -118,7 +123,7 @@ def test_import_with_env_sink_loads_no_cloud_client(uri: str) -> None:
             "loaded": [m for m in {list(_CLOUD_MODULES)!r} if m in sys.modules],
         }}))
         """,
-        env={"EVALSHIFT_SINK": uri},
+        env={"EVALSHIFT_CAPTURE_STORE": uri},
     )
     report = json.loads(result.stdout.strip().splitlines()[-1])
     assert report["sink"] == "ObjectStoreSink"
@@ -127,18 +132,18 @@ def test_import_with_env_sink_loads_no_cloud_client(uri: str) -> None:
 
 def test_import_with_a_broken_sink_exits_zero_and_logs_nothing() -> None:
     # The CLI imports the SDK, and a developer may have both env vars exported in a shell:
-    # `import evalshift` must stay silent and successful whatever EVALSHIFT_SINK holds.
+    # `import evalshift` must stay silent and successful whatever EVALSHIFT_CAPTURE_STORE holds.
     result = _run_child(
         "import evalshift",
-        env={"EVALSHIFT_SINK": "ftp://bucket/prefix", "EVALSHIFT_CAPTURE": "1"},
+        env={"EVALSHIFT_CAPTURE_STORE": "ftp://bucket/prefix", "EVALSHIFT_CAPTURE": "1"},
     )
-    assert "EVALSHIFT_SINK" not in result.stderr
+    assert "EVALSHIFT_CAPTURE_STORE" not in result.stderr
 
 
 def test_decorating_with_a_broken_sink_fails_the_process_naming_the_fix() -> None:
     result = _run_child(
         "from evalshift import capture\ncapture.agent(suite='s', redact=False, tools=[])",
-        env={"EVALSHIFT_SINK": "ftp://bucket/prefix", "EVALSHIFT_CAPTURE": "1"},
+        env={"EVALSHIFT_CAPTURE_STORE": "ftp://bucket/prefix", "EVALSHIFT_CAPTURE": "1"},
         expect_success=False,
     )
     assert result.returncode != 0

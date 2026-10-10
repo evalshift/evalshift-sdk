@@ -138,7 +138,8 @@ def test_open_store_dispatches_on_scheme() -> None:
 
 
 def test_open_store_does_not_construct_a_client() -> None:
-    # Lazy by contract: parsing EVALSHIFT_SINK at import must never touch the credential chain.
+    # Lazy by contract: parsing EVALSHIFT_CAPTURE_STORE at import must never touch the credential
+    # chain.
     store = open_store("s3://b/p")
     assert isinstance(store, S3Store)
     assert store._client is None

@@ -993,7 +993,7 @@ class _Capture:
         """Decorator that records a tool span (no-op when no agent session is active).
 
         Supports both ``@capture.tool`` and ``@capture.tool(name="...")``. Like :meth:`agent`, an
-        unusable ``EVALSHIFT_SINK`` raises here, at decoration time, when capture is on.
+        unusable ``EVALSHIFT_CAPTURE_STORE`` raises here, at decoration time, when capture is on.
         """
         config.require_sink_ready()
 

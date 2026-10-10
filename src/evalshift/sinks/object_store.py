@@ -2,8 +2,9 @@
 
 Local disk is the SDK's default and stays so. This sink exists for hosts whose disk does not
 survive them -- Fargate tasks, Lambda environments, pods -- where a capture written to
-``.evalshift/`` is gone the moment the process is. Configure it with ``EVALSHIFT_SINK=<uri>``
-(see :mod:`evalshift.config`) or ``configure(sink=ObjectStoreSink(store))``.
+``.evalshift/`` is gone the moment the process is. Configure it with
+``EVALSHIFT_CAPTURE_STORE=<uri>`` (see :mod:`evalshift.config`) or
+``configure(sink=ObjectStoreSink(store))``.
 
 **Key layout is the local layout.** ``captures/<safe_suite>/<capture_id>.json`` and
 ``toolsets/<hex>.json`` under the store's prefix -- byte for byte what

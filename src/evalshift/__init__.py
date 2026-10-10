@@ -6,7 +6,7 @@ and writes CLI-valid traces to disk. Capture is off unless ``EVALSHIFT_CAPTURE=1
 Public surface: the ``capture`` decorator, the ``record_model_call`` helper, the programmatic
 ``configure`` entry point, the ``default_redactor`` reachable via the required ``redact=True``,
 the built-in ``FileSink`` / ``MemorySink`` / ``ObjectStoreSink`` (the last also selected by
-``EVALSHIFT_SINK``), and ``flush_captures`` to wait for queued object-store uploads.
+``EVALSHIFT_CAPTURE_STORE``), and ``flush_captures`` to wait for queued object-store uploads.
 
 Read side (tooling): ``load_capture`` / ``load_envelope`` read and upgrade a written capture to
 the current schema version; ``register_migration`` plugs in a step for a future version;

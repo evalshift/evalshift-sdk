@@ -1,4 +1,4 @@
-"""Every explicit touch point raises the recorded ``EVALSHIFT_SINK`` error while capture is on."""
+"""Every explicit touch point raises the recorded store-variable error while capture is on."""
 
 from __future__ import annotations
 
@@ -14,13 +14,15 @@ from evalshift.config import is_capture_enabled, require_sink_ready, reset_confi
 
 @pytest.fixture
 def broken_sink(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("EVALSHIFT_SINK", "ftp://bucket/prefix")
+    monkeypatch.setenv("EVALSHIFT_CAPTURE_STORE", "ftp://bucket/prefix")
     monkeypatch.setenv("EVALSHIFT_CAPTURE", "1")
     reset_config()  # records, never raises
 
 
 def test_agent_decorator_raises_at_decoration(broken_sink: None) -> None:
-    with pytest.raises(SinkConfigurationError, match="EVALSHIFT_SINK is not a valid store URI"):
+    with pytest.raises(
+        SinkConfigurationError, match="EVALSHIFT_CAPTURE_STORE is not a valid store URI"
+    ):
         capture.agent(suite="s", redact=False, tools=[])
 
 
@@ -76,7 +78,7 @@ def test_langchain_handler_raises_at_construction(broken_sink: None) -> None:
 def test_gate_off_never_raises_or_warns(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    monkeypatch.setenv("EVALSHIFT_SINK", "ftp://bucket/prefix")
+    monkeypatch.setenv("EVALSHIFT_CAPTURE_STORE", "ftp://bucket/prefix")
     monkeypatch.delenv("EVALSHIFT_CAPTURE", raising=False)
     reset_config()
     with caplog.at_level(logging.DEBUG, logger="evalshift"):

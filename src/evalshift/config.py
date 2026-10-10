@@ -45,8 +45,13 @@ CAPTURE_TTL_ENV = "EVALSHIFT_CAPTURE_TTL"
 DEDUP_ENV = "EVALSHIFT_DEDUP"
 SAMPLE_RATE_ENV = "EVALSHIFT_SAMPLE_RATE"
 
-#: Env var naming an object store to ship captures to (``s3://`` / ``gs://`` / ``az://``).
-SINK_ENV = "EVALSHIFT_SINK"
+#: Env var naming an object store to ship captures to (``s3://`` / ``gs://`` / ``az://``). Same
+#: name and meaning as the CLI's ``captures.store``.
+CAPTURE_STORE_ENV = "EVALSHIFT_CAPTURE_STORE"
+
+#: The 0.5.0 name of :data:`CAPTURE_STORE_ENV`. Still read, silently, when the new name is unset
+#: or blank, so deployments that set it keep working.
+LEGACY_SINK_ENV = "EVALSHIFT_SINK"
 
 #: Values (case-insensitive, stripped) that count as "capture on". Everything else is off.
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
@@ -106,7 +111,7 @@ def _env_optional_float(name: str, default: float | None) -> float | None:
 
 
 class SinkConfigurationError(RuntimeError):
-    """``EVALSHIFT_SINK`` names a store the SDK cannot build.
+    """``EVALSHIFT_CAPTURE_STORE`` names a store the SDK cannot build.
 
     Recorded when the process-wide config is built (at ``import evalshift``) and raised by
     :func:`require_sink_ready` at the first explicit touch -- a ``capture.*`` decorator, a client
@@ -117,11 +122,26 @@ class SinkConfigurationError(RuntimeError):
     """
 
 
-def _env_sink() -> Sink | None:
-    """Build the sink ``EVALSHIFT_SINK`` names, or ``None`` for the default ``FileSink``.
+def _store_env() -> tuple[str, str] | None:
+    """The object-store URI from the environment, and the name of the variable that held it.
 
-    Blank counts as unset. The store's client is built lazily, so this never touches the network
-    or the credential chain.
+    ``EVALSHIFT_CAPTURE_STORE`` wins; ``EVALSHIFT_SINK`` (its 0.5.0 name) is read only when the
+    new name is unset or blank. Blank counts as unset. The name comes back so every message
+    points at the variable the user actually set.
+    """
+    for name in (CAPTURE_STORE_ENV, LEGACY_SINK_ENV):
+        raw = os.environ.get(name, "").strip()
+        if raw:
+            return name, raw
+    return None
+
+
+def _env_sink() -> Sink | None:
+    """Build the sink ``EVALSHIFT_CAPTURE_STORE`` (or ``EVALSHIFT_SINK``) names, or ``None`` for
+    the default ``FileSink``.
+
+    The store's client is built lazily, so this never touches the network or the credential
+    chain.
 
     Raises:
         SinkConfigurationError: when the value is set but unusable. The text never includes the
@@ -134,27 +154,27 @@ def _env_sink() -> Sink | None:
             other caller holding onto a caught ``SinkConfigurationError`` must clear both the
             same way first.
     """
-    raw = os.environ.get(SINK_ENV, "").strip()
-    if not raw:
+    found = _store_env()
+    if found is None:
         return None
+    name, raw = found
     try:
         return ObjectStoreSink(open_store(raw))
     except MissingStoreDependencyError as exc:
         raise SinkConfigurationError(
-            f"{SINK_ENV} points at an object store ({exc.scheme}://), but {exc.package} is not "
-            f"installed. Run: pip install {exc.packages}, or unset {SINK_ENV} to capture to "
+            f"{name} points at an object store ({exc.scheme}://), but {exc.package} is not "
+            f"installed. Run: pip install {exc.packages}, or unset {name} to capture to "
             "local disk."
         ) from None
     except ValueError:
         raise SinkConfigurationError(
-            f"{SINK_ENV} is not a valid store URI. Accepted forms: {STORE_URI_FORMS}. "
+            f"{name} is not a valid store URI. Accepted forms: {STORE_URI_FORMS}. "
             "Credentials never go in the URI."
         ) from None
     except Exception as exc:
         # Not a grammar or missing-library error, so its text is unknown and may quote the value.
         raise SinkConfigurationError(
-            f"{SINK_ENV} could not be opened ({type(exc).__name__}). "
-            "Unset it to capture to local disk."
+            f"{name} could not be opened ({type(exc).__name__}). Unset it to capture to local disk."
         ) from None
 
 
@@ -162,10 +182,11 @@ def _env_sink() -> Sink | None:
 class _Config:
     """Process-wide capture configuration, mutated by :func:`configure`.
 
-    ``sink`` defaults from ``EVALSHIFT_SINK`` (an object-store URI selects an
-    :class:`~evalshift.sinks.object_store.ObjectStoreSink`; unset or blank leaves it ``None``,
-    i.e. the default ``FileSink``; an unusable value leaves it ``None`` and records ``sink_error``
-    instead); an explicit ``configure(sink=...)`` still wins and clears ``sink_error``.
+    ``sink`` defaults from ``EVALSHIFT_CAPTURE_STORE``, or its 0.5.0 name ``EVALSHIFT_SINK``: an
+    object-store URI selects an :class:`~evalshift.sinks.object_store.ObjectStoreSink`; unset or
+    blank leaves it ``None``, i.e. the default ``FileSink``; an unusable value leaves it ``None``
+    and records ``sink_error`` instead. An explicit ``configure(sink=...)`` still wins and clears
+    ``sink_error``.
     Hygiene fields (``dedup`` / ``max_captures`` / ``capture_ttl`` / ``sample_rate``) default from
     env vars so a host that never calls :func:`configure` still gets bounded ``captures/``. A fault
     while reading any env var fails open to the built-in default via :func:`safety.guard`.
@@ -212,7 +233,7 @@ def _gate_on() -> bool:
 
 
 def _sink_blocked() -> bool:
-    """True while a recorded ``EVALSHIFT_SINK`` error must stop captures; warns once per process."""
+    """True while a recorded store-variable error must stop captures; warns once per process."""
     global _SINK_BLOCK_WARNED
     if _CONFIG.sink_error is None:
         return False
@@ -223,7 +244,7 @@ def _sink_blocked() -> bool:
 
 
 def is_capture_enabled() -> bool:
-    """True iff ``EVALSHIFT_CAPTURE`` is truthy and no unusable ``EVALSHIFT_SINK`` blocks capture.
+    """True iff ``EVALSHIFT_CAPTURE`` is truthy and no unusable store variable blocks capture.
 
     A sink the user asked for is never silently replaced by local disk: with the gate on and a
     recorded sink error this is ``False`` (one ``WARNING`` per process), so every entry point
@@ -260,7 +281,7 @@ def configure(
     """Set process-wide capture options. Only the arguments you pass are changed (merge)."""
     if sink is not _UNSET:
         _CONFIG.sink = sink
-        _CONFIG.sink_error = None  # an explicit sink replaces whatever EVALSHIFT_SINK named
+        _CONFIG.sink_error = None  # an explicit sink replaces whatever the store env var named
     else:
         require_sink_ready()
     if sample_rate is not _UNSET:
@@ -393,7 +414,8 @@ def require_model_call() -> bool:
 
 __all__ = [
     "CAPTURE_ENV",
-    "SINK_ENV",
+    "CAPTURE_STORE_ENV",
+    "LEGACY_SINK_ENV",
     "SinkConfigurationError",
     "active_sink",
     "configure",
