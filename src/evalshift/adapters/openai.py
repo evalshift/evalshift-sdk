@@ -55,6 +55,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, TypeVar, cast
 
+from evalshift import config
 from evalshift.adapters._wrap import (
     CallSpec,
     ClientProxy,
@@ -329,7 +330,12 @@ def wrap_openai(client: C) -> C:
 
     Returns:
         A drop-in proxy that records inside an active capture session and is inert outside one.
+
+    Raises:
+        ~evalshift.SinkConfigurationError: when capture is on and ``EVALSHIFT_CAPTURE_STORE``
+            cannot be built.
     """
+    config.require_sink_ready()  # a sink the SDK cannot build fails here, at startup
     return cast(C, ClientProxy(client, _OVERRIDES))
 
 

@@ -46,12 +46,13 @@ pip install "evalshift-sdk[anthropic]"     # anthropic>=0.40
 pip install "evalshift-sdk[google-genai]"  # google-genai>=1.0
 ```
 
-Optional object-store sinks (`EVALSHIFT_SINK=s3://…` / `gs://…` / `az://…`, see below):
+Optional object stores (`EVALSHIFT_CAPTURE_STORE=s3://…` / `gs://…` / `az://…`, see below) use the
+provider's own client library — install it like any other package:
 
 ```bash
-pip install "evalshift-sdk[s3]"            # boto3 — Amazon S3 and S3-compatible stores
-pip install "evalshift-sdk[gcs]"           # google-cloud-storage
-pip install "evalshift-sdk[azure]"         # azure-storage-blob + azure-identity
+pip install boto3                              # s3:// — Amazon S3 and S3-compatible stores
+pip install google-cloud-storage               # gs://
+pip install azure-storage-blob azure-identity  # az://
 ```
 
 Every adapter and store module is import-guarded, so the SDK stays dependency-free at runtime unless you opt in.
@@ -96,7 +97,7 @@ change required (precedence: an explicit `configure(...)` call > env var > built
 | `EVALSHIFT_SAMPLE_RATE` | off | Capture only this fraction of runs, e.g. `0.25`. |
 | `EVALSHIFT_DIR` | `.evalshift` | Capture root directory. |
 
-A malformed value falls back to the default (capture never crashes). To restore fully unbounded
+A malformed value falls back to the default (these knobs never crash capture). To restore fully unbounded
 capture: `EVALSHIFT_MAX_CAPTURES=0 EVALSHIFT_DEDUP=off`. Disable dedup with `off` (or `0`/`none`);
 `false`/`no` are not recognised and leave dedup on. `EVALSHIFT_SAMPLE_RATE=0` means sampling off
 (capture every run) — it is not the same as `configure(sample_rate=0.0)`, which captures nothing.
@@ -109,15 +110,21 @@ On Fargate, Lambda or Kubernetes the capture directory disappears with the task.
 to an object store you own instead — one env var next to the gate, no code change:
 
 ```bash
-EVALSHIFT_CAPTURE=1 EVALSHIFT_SINK=s3://acme-evals/support-agent python agent.py
+EVALSHIFT_CAPTURE=1 EVALSHIFT_CAPTURE_STORE=s3://acme-evals/support-agent python agent.py
 ```
 
-`s3://<bucket>/<prefix>` (also MinIO, R2, B2 via `AWS_ENDPOINT_URL`), `gs://<bucket>/<prefix>` and
-`az://<account>/<container>/<prefix>` are accepted; install the matching extra above. Credentials
-come from each provider's default chain, never from the URI. Uploads run on a bounded background
-thread and never raise into the agent; an invalid `EVALSHIFT_SINK` or a missing extra logs one
-warning and falls back to local disk. The keys mirror the local layout exactly, so the CLI reads a
-bucket unchanged once `captures.store` names it in `evalshift.yaml`. Hosts stopped by `SIGTERM`
+SDK 0.5.0 called this variable `EVALSHIFT_SINK`; that name still works when
+`EVALSHIFT_CAPTURE_STORE` is unset. `s3://<bucket>/<prefix>` (also MinIO, R2, B2 via `AWS_ENDPOINT_URL`), `gs://<bucket>/<prefix>` and
+`az://<account>/<container>/<prefix>` are accepted; install the provider's client library (above).
+Credentials come from each provider's default chain, never from the URI.
+
+Uploads run on a bounded background thread and never raise into the agent. Configuration is the
+one thing that does raise: if `EVALSHIFT_CAPTURE_STORE` is set but the library is missing or the value is
+malformed, the first `capture.*` decorator, client wrapper or `configure()` call raises
+`SinkConfigurationError` — at startup, naming the `pip install` to run — instead of quietly
+writing to local disk. With `EVALSHIFT_CAPTURE` off nothing happens at all. The keys mirror the
+local layout exactly, so the CLI reads a bucket unchanged once `captures.store` names it in
+`evalshift.yaml`. Hosts stopped by `SIGTERM`
 should call `evalshift.flush_captures()` from a shutdown hook (Lambda: before the handler
 returns). The hygiene knobs above apply to local disk only; bucket retention is a lifecycle rule.
 Details: [DOCS.md — ObjectStoreSink and cloud stores](https://github.com/evalshift/evalshift-sdk/blob/main/DOCS.md#objectstoresink-and-cloud-stores).

@@ -518,7 +518,8 @@ by `GENERATION_KEYS`) and `requested_tool_calls` (via `extract_requested_tool_ca
 ### D-stores — ship captures to a user-owned bucket; layout is the interface
 Production hosts are ephemeral (Fargate, Lambda, pods) and a capture on their disk dies with
 them. `ObjectStoreSink` (`sinks/object_store.py`) writes to any `ObjectStore` (`stores/base.py`:
-`put(key, bytes)`), selected by `EVALSHIFT_SINK=<uri>` or `configure(sink=...)`.
+`put(key, bytes)`), selected by `EVALSHIFT_SINK=<uri>` (renamed `EVALSHIFT_CAPTURE_STORE`, see
+D-stores-c) or `configure(sink=...)`.
 
 - **Keys are the local layout** (`captures/<safe_suite>/cap_<hex>.json`, `toolsets/<hex>.json`),
   so the CLI mirrors a bucket into `.evalshift/` and reads it unchanged. The documented contract
@@ -526,10 +527,13 @@ them. `ObjectStoreSink` (`sinks/object_store.py`) writes to any `ObjectStore` (`
 - **One URI grammar** shared verbatim with the CLI (`stores/uri.py`): `s3://`, `gs://`,
   `az://<account>/<container>/<prefix>`; `@`/`?` rejected so credentials never live in config.
   Neither leaks into logs either: the `@`/`?` rejections do not echo the URI, and the
-  invalid-`EVALSHIFT_SINK` warning never echoes the env value -- it names the variable, the
-  accepted forms and the local-disk fallback (or, for a missing client library, the pip extra).
+  invalid-`EVALSHIFT_SINK` message never echoes the env value (it is now primarily an exception;
+  see D-stores-b) -- it names the variable, the accepted forms and the package to install --
+  never the value.
 - **Adapters are thin and lazy** (`stores/s3.py`, `gcs.py`, `azure.py`): client built on first
-  `put`, typed `Any`, library imported inside the method. Extras `[s3]`, `[gcs]`, `[azure]`;
+  `put`, typed `Any`, library imported inside the method. Client libraries are plain packages
+  (`pip install boto3` / `google-cloud-storage` / `azure-storage-blob azure-identity`); the
+  extras of the same names stay in pyproject as tested floors but are never advertised;
   `dependencies = []` holds (D-deps). No `fsspec`: it pins botocore aggressively and pulls async
   stacks, too heavy for an embedded SDK.
 - **Background queue, bounded, drop-newest on overflow**; one daemon worker; an exit flush
@@ -540,16 +544,39 @@ them. `ObjectStoreSink` (`sinks/object_store.py`) writes to any `ObjectStore` (`
   handler: it would block forever on the sink's non-reentrant lock if the signal landed while
   the main thread held it.
 - **No retry layer**: the cloud clients retry already.
-- **Warning-level logging, deliberately**: the first failed put per sink, an exit flush that
-  times out with items pending, and an invalid or unusable `EVALSHIFT_SINK`, log at `WARNING` rather than the capture path's usual `debug`,
-  because a silently dropped firehose on an ephemeral host is exactly the loss this feature
-  exists to prevent. Later put failures on the same sink drop back to `debug`.
+- **Warning-level logging, deliberately**: the first failed put per sink and an exit flush
+  that times out with items pending log at `WARNING` rather than the capture path's usual
+  `debug`, because a silently dropped firehose on an ephemeral host is exactly the loss this
+  feature exists to prevent. Later put failures on the same sink drop back to `debug`.
 - **Sidecar routing**: `config.toolset_writer()` returns the object sink's `write_toolset` when
   one is active, else the file-based `ToolsetSink`; `_stamp_toolset` no longer constructs a sink.
   A failed background sidecar put releases its fingerprint so the next model call re-uploads it,
   rather than every later capture in a long-lived process pointing at a sidecar that never landed.
 - **GC does not apply** (`write` returns `None`); bucket lifecycle rules replace it. Dedup still
   applies, per process.
+
+### D-stores-b — an unusable `EVALSHIFT_CAPTURE_STORE` raises at startup; it is never replaced by disk
+A warning on a green deploy is read by nobody, and a sink the user asked for and did not get is
+the loss D-stores exists to prevent. So configuration is a third carve-out from fail-open (with
+redaction and the read side): `_Config` records a `SinkConfigurationError` at import and
+`config.require_sink_ready()` raises it at the first explicit touch -- `capture.agent` /
+`agent_session` / `tool`, `wrap_openai` / `wrap_anthropic` / `wrap_genai`,
+`EvalShiftCallbackHandler()`, `configure()` without a `sink` -- iff `EVALSHIFT_CAPTURE` is on.
+Bare `import evalshift` never raises (the CLI imports the SDK; a shell may export the vars), and
+with capture off nothing happens. Backstop: `is_capture_enabled()` is `False` (one `WARNING`)
+while an error is recorded, so a gate that turns on late drops captures rather than writing them
+to local disk. Messages name packages, not extras (`pip install boto3`), because a user who
+installed the SDK normally does not know what an extra is, and `"evalshift-sdk[s3]"` needs quotes
+in zsh. Runtime faults (puts, queue, exit flush) stay fail-open. `MissingExtraError` became
+`MissingStoreDependencyError`, no alias (0.5.0 was one day old).
+
+### D-stores-c — `EVALSHIFT_SINK` is renamed `EVALSHIFT_CAPTURE_STORE`
+"Sink" is the SDK's internal word for where a finished capture goes; a user setting the
+variable thinks "where do my captures go", and the CLI already calls the same bucket
+`captures.store`. One word on both sides: `EVALSHIFT_CAPTURE_STORE`. `EVALSHIFT_SINK` (0.5.0)
+stays a silent alias read only when the new name is unset or blank (no deprecation warning:
+one day of exposure does not justify log noise), and `_store_env()` returns the variable name
+with the value so every `SinkConfigurationError` names the one the user set.
 
 ## Open follow-ups (not blocking v1)
 - ~~**D1-followup:** unify packaging so CLI + SDK co-install cleanly~~ — resolved 2026-09-09 in

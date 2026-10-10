@@ -6,7 +6,7 @@ and writes CLI-valid traces to disk. Capture is off unless ``EVALSHIFT_CAPTURE=1
 Public surface: the ``capture`` decorator, the ``record_model_call`` helper, the programmatic
 ``configure`` entry point, the ``default_redactor`` reachable via the required ``redact=True``,
 the built-in ``FileSink`` / ``MemorySink`` / ``ObjectStoreSink`` (the last also selected by
-``EVALSHIFT_SINK``), and ``flush_captures`` to wait for queued object-store uploads.
+``EVALSHIFT_CAPTURE_STORE``), and ``flush_captures`` to wait for queued object-store uploads.
 
 Read side (tooling): ``load_capture`` / ``load_envelope`` read and upgrade a written capture to
 the current schema version; ``register_migration`` plugs in a step for a future version;
@@ -16,7 +16,7 @@ the current schema version; ``register_migration`` plugs in a step for a future 
 from __future__ import annotations
 
 from evalshift.capture.api import capture, record_model_call
-from evalshift.config import configure, flush_captures
+from evalshift.config import SinkConfigurationError, configure, flush_captures
 from evalshift.redaction import Redactor, RedactSetting, default_redactor
 from evalshift.sinks.file import FileSink
 from evalshift.sinks.memory import MemorySink
@@ -39,6 +39,7 @@ __all__ = [
     "ObjectStoreSink",
     "RedactSetting",
     "Redactor",
+    "SinkConfigurationError",
     "__version__",
     "capture",
     "configure",

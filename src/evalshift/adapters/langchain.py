@@ -279,6 +279,7 @@ class EvalShiftCallbackHandler(BaseCallbackHandler):
         code_version: str = "",
     ) -> None:
         super().__init__()
+        config.require_sink_ready()
         self._suite = suite
         self._code_version = code_version
         self._redact = resolve_redactor(redact)

@@ -770,6 +770,7 @@ class _Capture:
         ``with``/``async with``.
         """
         redactor = resolve_redactor(redact)  # eager: an invalid value fails at decoration time
+        config.require_sink_ready()  # eager too: a sink the SDK cannot build fails at startup
 
         def decorate(fn: Callable[P, R]) -> Callable[P, R]:
             if inspect.iscoroutinefunction(fn):
@@ -840,6 +841,7 @@ class _Capture:
         dynamic, per-turn conversation (one ``with capture.agent_session(...)`` per turn).
         """
         redactor = resolve_redactor(redact)  # eager: ahead of the gate, so a bad value always fails
+        config.require_sink_ready()
         if not config.is_capture_enabled():
             yield None
             return
@@ -906,6 +908,7 @@ class _Capture:
         ``async with`` for a dynamic, per-turn conversation.
         """
         redactor = resolve_redactor(redact)  # eager: ahead of the gate, so a bad value always fails
+        config.require_sink_ready()
         if not config.is_capture_enabled():
             yield None
             return
@@ -989,8 +992,10 @@ class _Capture:
     def tool(self, fn: Callable[..., Any] | None = None, *, name: str | None = None) -> Any:
         """Decorator that records a tool span (no-op when no agent session is active).
 
-        Supports both ``@capture.tool`` and ``@capture.tool(name="...")``.
+        Supports both ``@capture.tool`` and ``@capture.tool(name="...")``. Like :meth:`agent`, an
+        unusable ``EVALSHIFT_CAPTURE_STORE`` raises here, at decoration time, when capture is on.
         """
+        config.require_sink_ready()
 
         def decorate(target: Callable[P, R]) -> Callable[P, R]:
             tool_name = name or target.__name__
