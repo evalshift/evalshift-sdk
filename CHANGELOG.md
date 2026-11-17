@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`parse_store_uri` no longer quotes a malformed bucket or account.** A URI
+  whose bucket (or Azure account) Python's `urlsplit` rejects itself, such as
+  a bracketed host that is not an IP address or a character that normalises
+  to `/`, used to raise `urlsplit`'s own `ValueError`, and two of those
+  messages quote that part of the URI. `parse_store_uri` and `open_store` now
+  raise `store URI names an invalid bucket or account; accepted forms: ...`
+  with no chained exception. `EVALSHIFT_CAPTURE_STORE` was not affected: its
+  `SinkConfigurationError` already replaced the message.
+
 ## [0.7.0] - 2026-10-22
 
 ### Changed

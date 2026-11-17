@@ -296,8 +296,9 @@ evalshift.stores.open_store(uri) -> ObjectStore (raises ValueError on grammar,
   "pip install <packages>" when any module the adapter needs is absent -- for az:// both
   azure-storage-blob and azure-identity)
 evalshift.stores.parse_store_uri(uri) -> StoreURI(scheme, bucket, container, prefix) -- grammar
-  shared with the CLI; '@' or '?' anywhere rejected (no credentials in URIs), without echoing
-  the URI in the error.
+  shared with the CLI; '@' or '?' anywhere rejected (no credentials in URIs). No ValueError it
+  raises quotes the URI or chains an error that does (a malformed bucket/account netloc ->
+  "store URI names an invalid bucket or account").
 evalshift.config.require_sink_ready() -> None: raises the recorded SinkConfigurationError iff
   EVALSHIFT_CAPTURE is on. evalshift.SinkConfigurationError(RuntimeError).
 flush_captures(timeout: float | None = None) -> bool  (top-level; True immediately for non-object sinks)
