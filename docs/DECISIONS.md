@@ -548,7 +548,13 @@ D-stores-c) or `configure(sink=...)`.
   Neither leaks into logs either: the `@`/`?` rejections do not echo the URI, and the
   invalid-`EVALSHIFT_SINK` message never echoes the env value (it is now primarily an exception;
   see D-stores-b) -- it names the variable, the accepted forms and the package to install --
-  never the value.
+  never the value. *Amended (Unreleased):* an `az://` container or prefix with an empty, `.` or
+  `..` segment is rejected, and `AzureBlobStore` refuses such a container, prefix or `put` key.
+  The Azure client puts the blob name in the request URL and its HTTP stack resolves dot
+  segments there, so blob `team/../../other/x.json` in container `evals` is written to container
+  `other` (observed with azure-storage-blob 12.31 over requests). S3 (boto3 sends the key as
+  given) and GCS (`/` is percent-encoded) keep such keys literal and still accept them. The
+  CLI's copy of the grammar does not carry this rule yet.
 - **Adapters are thin and lazy** (`stores/s3.py`, `gcs.py`, `azure.py`): client built on first
   `put`, typed `Any`, library imported inside the method. Client libraries are plain packages
   (`pip install boto3` / `google-cloud-storage` / `azure-storage-blob azure-identity`); the
