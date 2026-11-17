@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **LangChain chat histories keep their tool pairing.** The callback handler
+  recorded each input message as `role` and `content` only, dropping an
+  `AIMessage`'s `tool_calls` and a `ToolMessage`'s `tool_call_id`, so a
+  multi-turn history replayed tool results with no call to answer. An
+  `AIMessage` with tool calls now records `tool_calls: [{id, name,
+  arguments}]` and a `ToolMessage` records `tool_call_id`, the shape the
+  evalshift CLI replays. A call already present as a `tool_use` block in
+  `content` (ChatAnthropic puts it in both) is not repeated.
+
 ## [0.7.0] - 2026-10-22
 
 ### Changed
