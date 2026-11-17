@@ -354,7 +354,10 @@ evalshift.adapters.langchain.EvalShiftCallbackHandler(*, suite: str, redact: Red
   normaliser record_model_call uses. Chat message present but no tool calls -> [] ("asked for
   nothing"); plain non-chat Generation (no .message) -> field unset (None). invalid_tool_calls
   are NOT included (parse failures, not requests). Streaming needs no special case: the
-  aggregated message arrives on on_llm_end. Payloads coerced to JSON-able primitives. Import is
+  aggregated message arrives on on_llm_end. Chat input messages record {role, content} plus
+  tool pairing in the replay shape: AIMessage.tool_calls -> tool_calls: [{id, name, arguments}]
+  (a call already in content as a tool_use block, ChatAnthropic-style, is not repeated);
+  ToolMessage -> tool_call_id. Payloads coerced to JSON-able primitives. Import is
   guarded: importing the module without langchain-core installed does not fail. DO NOT mix with
   @capture.tool on the same code path (double-record risk; the handler keeps its own
   run_id-based bookkeeping and does not bind the contextvar session).

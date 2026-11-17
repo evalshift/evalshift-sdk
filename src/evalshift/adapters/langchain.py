@@ -119,17 +119,64 @@ def _generation_config(kwargs: dict[str, Any]) -> dict[str, Any] | None:
     return sanitize_generation_config({k: merged[k] for k in GENERATION_KEYS if k in merged})
 
 
+def _tool_use_ids(content: Any) -> set[str]:
+    """The ids of the ``tool_use`` blocks in a block-list ``content`` (ChatAnthropic's shape)."""
+    if not isinstance(content, list):
+        return set()
+    return {
+        str(block["id"])
+        for block in content
+        if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("id")
+    }
+
+
+def _history_tool_calls(message: Any, content: Any) -> list[dict[str, Any]]:
+    """An ``AIMessage``'s ``tool_calls`` as ``{id, name, arguments}``, the shape replay reads.
+
+    A call whose id is already a ``tool_use`` block in ``content`` is left out: ChatAnthropic
+    records each call in both places, and the CLI reads both, so it would replay twice.
+    """
+    raw = getattr(message, "tool_calls", None)
+    if not isinstance(raw, (list, tuple)):
+        return []
+    in_content = _tool_use_ids(content)
+    calls: list[dict[str, Any]] = []
+    for item in raw:
+        call_id = _tool_call_field(item, "id")
+        if call_id is not None and str(call_id) in in_content:
+            continue
+        calls.append(
+            {
+                "id": call_id,
+                "name": _tool_call_field(item, "name"),
+                "arguments": _tool_call_field(item, "args"),
+            }
+        )
+    return calls
+
+
 def _messages_to_input(messages: Any) -> list[dict[str, Any]]:
-    """Flatten LangChain ``list[list[BaseMessage]]`` into JSON-able ``{role, content}`` dicts."""
+    """Flatten LangChain ``list[list[BaseMessage]]`` into JSON-able ``{role, content}`` dicts.
+
+    Tool pairing survives, in the shape the CLI replays: an ``AIMessage``'s ``tool_calls`` become
+    ``tool_calls: [{id, name, arguments}]`` and a ``ToolMessage`` keeps its ``tool_call_id``, so a
+    multi-turn history never replays a tool result without the call it answers.
+    """
     out: list[dict[str, Any]] = []
     for batch in messages or []:
         for message in batch or []:
-            out.append(
-                {
-                    "role": str(getattr(message, "type", "message")),
-                    "content": jsonable(getattr(message, "content", str(message))),
-                }
-            )
+            content = getattr(message, "content", str(message))
+            entry: dict[str, Any] = {
+                "role": str(getattr(message, "type", "message")),
+                "content": jsonable(content),
+            }
+            calls = _history_tool_calls(message, content)
+            if calls:
+                entry["tool_calls"] = jsonable(calls)
+            tool_call_id = getattr(message, "tool_call_id", None)
+            if tool_call_id is not None and tool_call_id != "":
+                entry["tool_call_id"] = str(tool_call_id)
+            out.append(entry)
     return out
 
 

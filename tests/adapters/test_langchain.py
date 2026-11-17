@@ -591,3 +591,116 @@ def test_requested_tool_calls_are_redacted(capturing: Path, read_captures: Captu
     model = _of_type(cap, "model_call")[0]
     assert model["requested_tool_calls"][0]["name"] == "mail"
     assert "bob@corp.com" not in str(model["requested_tool_calls"])
+
+
+# --- chat history: tool calls stay paired with their results ---------------------------------
+
+
+def _history_input(
+    suite: str, history: list[Any], read_captures: CaptureReader
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Run one chat model call over ``history``; return the capture and the model call's input."""
+    handler = EvalShiftCallbackHandler(suite=suite, redact=False, tools=[])
+    root, mc = uuid4(), uuid4()
+    handler.on_chain_start({"name": "c"}, {"q": "x"}, run_id=root, parent_run_id=None)
+    handler.on_chat_model_start({"name": "llm"}, [history], run_id=mc, parent_run_id=root)
+    handler.on_llm_end(_chat_llm_result("done", []), run_id=mc, parent_run_id=root)
+    handler.on_chain_end({"output": "done"}, run_id=root, parent_run_id=None)
+    cap = read_captures(suite)[0]
+    return cap, _of_type(cap, "model_call")[0]["input"]
+
+
+def test_chat_input_keeps_tool_calls_and_tool_call_id(
+    capturing: Path, read_captures: CaptureReader
+) -> None:
+    """The CLI's replay shape: ``tool_calls: [{id, name, arguments}]`` and ``tool_call_id``."""
+    history = [
+        SimpleNamespace(type="human", content="how many hits for x?"),
+        SimpleNamespace(
+            type="ai",
+            content="",
+            tool_calls=[
+                {"name": "search", "args": {"q": "x"}, "id": "call_1", "type": "tool_call"}
+            ],
+        ),
+        SimpleNamespace(type="tool", content="3 hits", tool_call_id="call_1"),
+    ]
+    cap, recorded = _history_input("lc_hist", history, read_captures)
+
+    AgentTrace.model_validate(cap["trace"])  # raises if not CLI-valid
+    assert recorded == [
+        {"role": "human", "content": "how many hits for x?"},
+        {
+            "role": "ai",
+            "content": "",
+            "tool_calls": [{"id": "call_1", "name": "search", "arguments": {"q": "x"}}],
+        },
+        {"role": "tool", "content": "3 hits", "tool_call_id": "call_1"},
+    ]
+
+
+def test_chat_input_without_tool_calls_keeps_its_shape(
+    capturing: Path, read_captures: CaptureReader
+) -> None:
+    history = [
+        SimpleNamespace(type="system", content="be brief"),
+        SimpleNamespace(type="human", content="hi"),
+        SimpleNamespace(type="ai", content="hello", tool_calls=[]),
+    ]
+    _cap, recorded = _history_input("lc_hist_plain", history, read_captures)
+    assert recorded == [
+        {"role": "system", "content": "be brief"},
+        {"role": "human", "content": "hi"},
+        {"role": "ai", "content": "hello"},
+    ]
+
+
+def test_tool_call_already_in_a_tool_use_block_is_not_repeated(
+    capturing: Path, read_captures: CaptureReader
+) -> None:
+    """ChatAnthropic puts each call in ``content`` as a ``tool_use`` block *and* in ``tool_calls``.
+
+    The CLI reads both, so recording both would replay the call twice.
+    """
+    history = [
+        SimpleNamespace(type="human", content="q"),
+        SimpleNamespace(
+            type="ai",
+            content=[
+                {"type": "text", "text": "checking"},
+                {"type": "tool_use", "id": "toolu_1", "name": "search", "input": {"q": "x"}},
+            ],
+            tool_calls=[
+                {"name": "search", "args": {"q": "x"}, "id": "toolu_1", "type": "tool_call"},
+                {"name": "fetch", "args": {"u": "y"}, "id": "toolu_2", "type": "tool_call"},
+            ],
+        ),
+        SimpleNamespace(type="tool", content="3 hits", tool_call_id="toolu_1"),
+        SimpleNamespace(type="tool", content="page", tool_call_id="toolu_2"),
+    ]
+    _cap, recorded = _history_input("lc_hist_anthropic", history, read_captures)
+    assert recorded[1]["content"][1]["id"] == "toolu_1"  # the block is kept as recorded
+    assert recorded[1]["tool_calls"] == [
+        {"id": "toolu_2", "name": "fetch", "arguments": {"u": "y"}}
+    ]
+    assert [m.get("tool_call_id") for m in recorded[2:]] == ["toolu_1", "toolu_2"]
+
+
+def test_real_langchain_messages_keep_tool_pairing(
+    capturing: Path, read_captures: CaptureReader
+) -> None:
+    pytest.importorskip("langchain_core")
+    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+    history = [
+        HumanMessage(content="how many hits for x?"),
+        AIMessage(content="", tool_calls=[{"name": "search", "args": {"q": "x"}, "id": "call_1"}]),
+        ToolMessage(content="3 hits", tool_call_id="call_1"),
+    ]
+    cap, recorded = _history_input("lc_hist_real", history, read_captures)
+
+    AgentTrace.model_validate(cap["trace"])
+    assert recorded[1]["tool_calls"] == [
+        {"id": "call_1", "name": "search", "arguments": {"q": "x"}}
+    ]
+    assert recorded[2]["tool_call_id"] == "call_1"
