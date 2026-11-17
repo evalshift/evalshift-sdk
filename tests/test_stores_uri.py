@@ -84,6 +84,29 @@ def test_grammar_rejection_does_not_echo_uri(uri: str, secret: str) -> None:
 
 
 @pytest.mark.parametrize(
+    ("uri", "netloc"),
+    [
+        # urlsplit hands a bracketed host to ipaddress, whose error quotes it.
+        ("s3://[SECRETV6]/prefix", "SECRETV6"),
+        # A fullwidth solidus NFKC-normalises to "/"; urlsplit's error quotes the whole netloc.
+        ("az://SECRETNET\uff0fWORK/c/p", "SECRETNET"),
+        # The other urlsplit netloc errors quote nothing, but must read the same.
+        ("s3://[vSECRETFUTURE]/prefix", "SECRETFUTURE"),
+        ("s3://[::1/prefix", "::1"),
+        ("gs://[127.0.0.1]/prefix", "127.0.0.1"),
+    ],
+)
+def test_bad_netloc_is_rejected_without_echoing_it(uri: str, netloc: str) -> None:
+    with pytest.raises(ValueError, match="names an invalid bucket or account") as excinfo:
+        parse_store_uri(uri)
+    assert netloc not in str(excinfo.value)
+    # No chained exception either: urlsplit's own error, which quotes the netloc, would ride along
+    # in a traceback or on ``__context__``.
+    assert excinfo.value.__cause__ is None
+    assert excinfo.value.__context__ is None
+
+
+@pytest.mark.parametrize(
     "uri",
     [
         "az://acmeprod/evals/../SECRETOTHER",

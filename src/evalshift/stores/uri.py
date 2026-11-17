@@ -96,10 +96,11 @@ def parse_store_uri(uri: str) -> StoreURI:
     """Parse ``uri`` against the grammar above.
 
     Raises:
-        ValueError: for an unknown scheme, a missing bucket or container, an Azure container or
-            prefix with an empty, ``.`` or ``..`` segment, or a URI that carries credentials
-            (``@``) or query parameters (``?``). The message names the
-            accepted forms and never echoes the URI, which may hold a pasted secret.
+        ValueError: for an unknown scheme, a missing or malformed bucket, a missing container,
+            an Azure container or prefix with an empty, ``.`` or ``..`` segment, or a URI that
+            carries credentials (``@``) or query parameters (``?``). The message names the
+            accepted forms and never echoes the URI, which may hold a pasted secret; nor does it
+            chain another exception that quotes it.
     """
     text = uri.strip()
     if "@" in text:
@@ -111,7 +112,17 @@ def parse_store_uri(uri: str) -> StoreURI:
         raise ValueError(
             "query parameters are not accepted in a store URI; use the provider's credential chain"
         )
-    parts = urlsplit(text)
+    # urlsplit rejects some netlocs itself (a bracketed host that is not an IP address, characters
+    # that NFKC-normalise to a delimiter), and two of those errors quote the netloc. Raise a fixed
+    # message instead, outside the ``except`` so urlsplit's error is not chained onto it either.
+    try:
+        parts = urlsplit(text)
+    except ValueError:
+        parts = None
+    if parts is None:
+        raise ValueError(
+            f"store URI names an invalid bucket or account; accepted forms: {STORE_URI_FORMS}"
+        )
     # Never echo the URI in a grammar error either: a pasted connection string (Azure's
     # `...;AccountKey=...`) carries no `@` or `?` and would otherwise land in logs verbatim.
     if not parts.scheme:
