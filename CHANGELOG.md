@@ -18,6 +18,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with no chained exception. `EVALSHIFT_CAPTURE_STORE` was not affected: its
   `SinkConfigurationError` already replaced the message.
 
+- **Azure keys can no longer leave their prefix.** The Azure client resolves
+  `.` and `..` segments in the request URL, so blob
+  `team/../../other/x.json` in container `evals` was written to container
+  `other`. An `az://` URI (`EVALSHIFT_CAPTURE_STORE` included) whose
+  container or prefix has an empty, `.` or `..` segment is now rejected, and
+  `AzureBlobStore` raises `ValueError` for such a container or prefix at
+  construction and for such a key on `put` (`ObjectStoreSink` logs it and
+  drops the capture, as for any failed put). Keys the SDK builds itself were
+  never affected: the suite is sanitised, a `conversation_id` is hashed and
+  capture ids are generated. S3 and GCS store such keys literally and are
+  unchanged.
+
 - **LangChain chat histories keep their tool pairing.** The callback handler
   recorded each input message as `role` and `content` only, dropping an
   `AIMessage`'s `tool_calls` and a `ToolMessage`'s `tool_call_id`, so a
