@@ -142,3 +142,59 @@ def test_failed_background_toolset_put_releases_fingerprint_for_retry() -> None:
     assert sink.write_toolset(TOOLS, fingerprint) == fingerprint
     assert sink.flush(timeout=5.0)
     assert key in store.objects
+
+
+class _RecordingBlobService:
+    """A stub ``BlobServiceClient``: records ``(container, blob)`` for every upload."""
+
+    def __init__(self) -> None:
+        self.uploads: list[tuple[str, str]] = []
+
+    def get_blob_client(self, container: str, blob: str) -> Any:
+        uploads = self.uploads
+
+        class _Blob:
+            def upload_blob(self, data: bytes, overwrite: bool) -> None:
+                uploads.append((container, blob))
+
+        return _Blob()
+
+
+def test_azure_sink_drops_a_capture_whose_key_would_leave_the_prefix(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from evalshift.stores.azure import AzureBlobStore
+
+    client = _RecordingBlobService()
+    sink = ObjectStoreSink(
+        AzureBlobStore("acct", "evals", "team-a", client=client), background=False
+    )
+    with caplog.at_level(logging.WARNING, logger="evalshift"):
+        sink.write(_envelope(capture_id="../../../other/cap_x"))
+    assert client.uploads == []
+    assert any("object store put" in r.message for r in caplog.records)
+
+
+def test_azure_sink_keeps_a_dotted_conversation_id_inside_the_prefix() -> None:
+    # Already safe before the key check: the id is hashed into conv_<16 hex>, never used raw.
+    from evalshift.stores.azure import AzureBlobStore
+
+    client = _RecordingBlobService()
+    sink = ObjectStoreSink(
+        AzureBlobStore("acct", "evals", "team-a", client=client),
+        background=False,
+        layout="conversation",
+    )
+    env = build_capture(
+        SpanTree(),
+        suite="support_agent",
+        agent_input="hi",
+        capture_id="cap_abc",
+        conversation_id="../../../other",
+        turn_index=0,
+    )
+    sink.write(env)
+    [(container, blob)] = client.uploads
+    assert container == "evals"
+    assert blob.startswith("team-a/captures/support_agent/conv_")
+    assert ".." not in blob

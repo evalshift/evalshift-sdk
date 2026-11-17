@@ -6,13 +6,17 @@ Needs ``azure-storage-blob`` and ``azure-identity``
 The account URL is derived as ``https://<account>.blob.core.windows.net``. Credentials come
 from ``DefaultAzureCredential`` -- Managed Identity on AKS, Container Apps and App Service,
 ``az login`` locally. The client is built on the first ``put``, never at construction.
+
+The Azure client resolves ``.`` and ``..`` segments in the request URL, even across containers,
+so a container, prefix or key with an empty, ``.`` or ``..`` segment raises ``ValueError``
+(:func:`~evalshift.stores.uri.has_unsafe_segment`): a key can never land outside the prefix.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from evalshift.stores.uri import require_store_modules
+from evalshift.stores.uri import has_unsafe_segment, require_store_modules
 
 
 class AzureBlobStore:
@@ -26,6 +30,11 @@ class AzureBlobStore:
         self.account = account
         self.container = container
         self.prefix = prefix.strip("/")
+        if has_unsafe_segment(container) or (self.prefix and has_unsafe_segment(self.prefix)):
+            raise ValueError(
+                "Azure container and prefix may not have an empty, '.' or '..' segment: the "
+                "Azure client would resolve it to another place, even another container"
+            )
         self.account_url = f"https://{account}.blob.core.windows.net"
         self.uri = f"az://{account}/{container}/{self.prefix}".rstrip("/")
         self._client = client
@@ -43,9 +52,13 @@ class AzureBlobStore:
         return self._client
 
     def put(self, key: str, data: bytes) -> None:
-        self._get_client().get_blob_client(self.container, self._key(key)).upload_blob(
-            data, overwrite=True
-        )
+        name = self._key(key)
+        if has_unsafe_segment(name):
+            raise ValueError(
+                "Azure blob key has an empty, '.' or '..' segment: the Azure client would "
+                "resolve it outside the store's prefix"
+            )
+        self._get_client().get_blob_client(self.container, name).upload_blob(data, overwrite=True)
 
 
 __all__ = ["AzureBlobStore"]

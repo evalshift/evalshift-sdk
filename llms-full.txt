@@ -289,7 +289,9 @@ ObjectStore (protocol, evalshift.stores): put(key: str, data: bytes) -> None
 Stores (lazy client, built on first put): evalshift.stores.s3.S3Store(bucket, prefix="", *,
   client=None) [AWS_ENDPOINT_URL honoured -> MinIO/R2/B2]; evalshift.stores.gcs.GCSStore(bucket,
   prefix="", *, client=None); evalshift.stores.azure.AzureBlobStore(account, container,
-  prefix="", *, client=None) [account_url https://<account>.blob.core.windows.net];
+  prefix="", *, client=None) [account_url https://<account>.blob.core.windows.net; a container,
+  prefix or put key with an empty, '.' or '..' segment -> ValueError, because the Azure client
+  resolves dot segments in the URL, even across containers];
   evalshift.stores.MemoryStore() (.objects snapshot). Each has .uri.
 evalshift.stores.open_store(uri) -> ObjectStore (raises ValueError on grammar,
   MissingStoreDependencyError (ImportError; .scheme/.module/.package/.packages/.extra) naming
@@ -297,7 +299,8 @@ evalshift.stores.open_store(uri) -> ObjectStore (raises ValueError on grammar,
   azure-storage-blob and azure-identity)
 evalshift.stores.parse_store_uri(uri) -> StoreURI(scheme, bucket, container, prefix) -- grammar
   shared with the CLI; '@' or '?' anywhere rejected (no credentials in URIs), without echoing
-  the URI in the error.
+  the URI in the error; an az:// container or prefix with an empty, '.' or '..' segment is
+  rejected.
 evalshift.config.require_sink_ready() -> None: raises the recorded SinkConfigurationError iff
   EVALSHIFT_CAPTURE is on. evalshift.SinkConfigurationError(RuntimeError).
 flush_captures(timeout: float | None = None) -> bool  (top-level; True immediately for non-object sinks)

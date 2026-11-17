@@ -81,3 +81,22 @@ def test_grammar_rejection_does_not_echo_uri(uri: str, secret: str) -> None:
     with pytest.raises(ValueError) as excinfo:
         parse_store_uri(uri)
     assert secret not in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "az://acmeprod/evals/../SECRETOTHER",
+        "az://acmeprod/evals/team/../../SECRETOTHER",
+        "az://acmeprod/../SECRETOTHER/team",
+        "az://acmeprod/./SECRETOTHER",
+        "az://acmeprod/evals/./SECRETOTHER",
+        "az://acmeprod/evals//SECRETOTHER",
+        "az://acmeprod/evals/team//SECRETOTHER",
+    ],
+)
+def test_azure_path_with_dot_or_empty_segment_is_rejected(uri: str) -> None:
+    # The Azure SDK resolves dot segments in the request URL, across containers.
+    with pytest.raises(ValueError, match=r"empty, '\.' or '\.\.' segment") as exc:
+        parse_store_uri(uri)
+    assert "SECRETOTHER" not in str(exc.value)

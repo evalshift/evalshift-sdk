@@ -6,9 +6,11 @@ Three forms are accepted::
     gs://<bucket>/<prefix>
     az://<account>/<container>/<prefix>
 
-``<prefix>`` is optional and may be empty; a trailing slash is stripped. Credentials never
-belong in a URI: any ``@`` or ``?`` is rejected so nobody is tempted to embed a key or a
-query parameter, and every adapter uses its provider's default credential chain instead.
+``<prefix>`` is optional and may be empty; a trailing slash is stripped. An ``az://`` container
+or prefix may not have an empty, ``.`` or ``..`` segment (see :func:`has_unsafe_segment`).
+Credentials never belong in a URI: any ``@`` or ``?`` is rejected so nobody is tempted to embed
+a key or a query parameter, and every adapter uses its provider's default credential chain
+instead.
 
 Stdlib only (D-deps).
 """
@@ -49,6 +51,20 @@ _PACKAGES_FOR_SCHEME: dict[str, str] = {
 }
 
 
+def has_unsafe_segment(path: str) -> bool:
+    """Whether ``path`` has an empty, ``.`` or ``..`` segment between its ``/`` separators.
+
+    Azure only. The Azure SDK puts the container and blob name into the request URL, and its HTTP
+    stack resolves dot segments there before sending: blob ``team/../../other/x.json`` in
+    container ``evals`` is written as blob ``x.json`` in container ``other``. So an Azure
+    container, prefix or key with such a segment is refused rather than allowed to land outside
+    the store's prefix. Empty segments go too: a blob name is never meant to hold ``//``. S3
+    sends the key as given and GCS percent-encodes ``/`` in object names, so both keep such keys
+    literal and accept them.
+    """
+    return any(segment in ("", ".", "..") for segment in path.split("/"))
+
+
 @dataclass(frozen=True)
 class StoreURI:
     """A parsed store URI.
@@ -80,8 +96,9 @@ def parse_store_uri(uri: str) -> StoreURI:
     """Parse ``uri`` against the grammar above.
 
     Raises:
-        ValueError: for an unknown scheme, a missing bucket or container, or a URI that
-            carries credentials (``@``) or query parameters (``?``). The message names the
+        ValueError: for an unknown scheme, a missing bucket or container, an Azure container or
+            prefix with an empty, ``.`` or ``..`` segment, or a URI that carries credentials
+            (``@``) or query parameters (``?``). The message names the
             accepted forms and never echoes the URI, which may hold a pasted secret.
     """
     text = uri.strip()
@@ -112,6 +129,12 @@ def parse_store_uri(uri: str) -> StoreURI:
         if not container:
             raise ValueError(
                 "Azure store URI names no container; expected az://<account>/<container>/<prefix>"
+            )
+        if has_unsafe_segment(path):
+            raise ValueError(
+                "Azure store URI has an empty, '.' or '..' segment in its container or prefix, "
+                "which the Azure client would resolve to another place; expected "
+                "az://<account>/<container>/<prefix>"
             )
         return StoreURI(scheme, parts.netloc, container, prefix.strip("/"))
     return StoreURI(scheme, parts.netloc, None, path)
